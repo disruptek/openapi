@@ -3,12 +3,15 @@ import os
 import json
 import times
 import re
+import streams
+
+# critical for, uh, reasons
+import tables
 
 import spec
-
 from schema2 import OpenApi2
 
-proc parseField(typed: FieldTypeDef; js: JsonNode): bool
+proc parseField(ftype: FieldTypeDef; js: JsonNode): bool
 
 proc parseSchema(schema: Schema; js: JsonNode): bool =
 	if js.kind == JObject and "type" in schema:
@@ -20,25 +23,25 @@ proc parseSchema(schema: Schema; js: JsonNode): bool =
 		if key notin schema:
 			missing.add key
 			continue
-		var typed = schema[key]
-		if typed.parseField(value):
+		var ftype = schema[key]
+		if ftype.parseField(value):
 			echo key, " ok"
 			continue
 		echo "parse failure for field ", key
 		return false
-	for pattern, typed in schema.pairs:
-		if typed.pattern:
+	for pattern, ftype in schema.pairs:
+		if ftype.pattern:
 			var rex = re(pattern, {reIgnoreCase})
 			for key in missing:
 				if not key.match(rex):
 					continue
-				if typed.parseField(js[key]):
+				if ftype.parseField(js[key]):
 					break
 				echo "parse failure for field ", key
 				return false
 			continue
 		if pattern notin js:
-			if typed.required:
+			if ftype.required:
 				echo "missing ", pattern, " from js"
 				return false
 			continue
@@ -46,33 +49,34 @@ proc parseSchema(schema: Schema; js: JsonNode): bool =
 
 	return true
 
-proc parseField(typed: FieldTypeDef; js: JsonNode): bool =
+proc parseField(ftype: FieldTypeDef; js: JsonNode): bool =
 	result = true
-	case typed.kind:
+	case ftype.kind:
 	of Anything: discard
-	of Natural:
-		result = js.kind in typed.kinds
+	of Primitive:
+		result = js.kind in ftype.kinds
 	of Complex:
-		result = typed.schema.parseSchema(js)
+		result = ftype.schema.parseSchema(js)
 	of Either:
-		result = typed.a.parseField(js) or typed.b.parseField(js)
+		result = ftype.a.parseField(js) or ftype.b.parseField(js)
 	of List:
 		for j in js.elems:
-			result = typed.member.parseField(j)
+			result = ftype.member.parseField(j)
 			if not result:
 				break
 
-let
-	content = stdin.newFileStream().readAll()
-	js = content.parseJson()
-if js.kind != JObject:
-	echo "dude, i was expecting a json object"
-	quit(1)
+if isMainModule:
+	let
+		content = stdin.newFileStream().readAll()
+		js = content.parseJson()
+	if js.kind != JObject:
+		echo "dude, i was expecting a json object"
+		quit(1)
 
-if "swagger" in js:
-	if js["swagger"].getStr != "2.0":
+	if "swagger" in js:
+		if js["swagger"].getStr != "2.0":
+			quit(0)
+	else:
 		quit(0)
-else:
-	quit(0)
-if not OpenApi2.parseSchema(js):
-	quit(1)
+	if not OpenApi2.parseSchema(js):
+		quit(1)

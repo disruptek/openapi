@@ -1,6 +1,9 @@
 #? replace(sub = "\t", by = " ")
 import spec
 
+# this is rather critical for reasons
+import tables
+
 let Info = {
 	"title": required JString,
 	"version": required JString,
@@ -53,7 +56,7 @@ let XmlObject = {
 
 # enum values could be literally anything.
 # not sure we can validate them beyond the guarantees json provides...
-let EnumArray = anything().arrayOf
+let EnumArray = arrayOf(anything {})
 
 var Items = {
 	"type": required JString,
@@ -294,5 +297,5 @@ let OpenApi2* = {
 	"tag": optional Tag.arrayOf,
 	"externalDocs": optional ExternalDocs,
 
-	"^x-": patterned optional anything(),
+	"^x-": patterned optional anything {},
 }.toSchema

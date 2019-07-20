@@ -12,27 +12,26 @@ type
 	# we only iterate over patterned field names after traversing
 	# the un-patterned names, so change this type at your peril
 	Schema* = OrderedTableRef[FieldName, FieldTypeDef]   ## complex objects
-
 	FieldName* = string ## the field name doubles as the pattern
 	FieldType* = enum   ## variant discriminator for value types
 		Anything ## anything or nothing (nullable)
-		Natural, ## a primitive value (integer, string, etc.)
+		Primitive, ## a primitive value (integer, string, etc.)
 		List,    ## an array
 		Either,  ## one of 2+ possible values
 		Complex  ## a map-like object
 	FieldTypeDef* = ref object ## the type for any given value
-		kinds: set[JsonNodeKind]
-		pattern: bool
-		required: bool
-		case kind: FieldType
-		of Anything, Natural: discard
+		kinds*: set[JsonNodeKind]
+		pattern*: bool
+		required*: bool
+		case kind*: FieldType
+		of Anything, Primitive: discard
 		of Either:
-			a: FieldTypeDef
-			b: FieldTypeDef
+			a*: FieldTypeDef
+			b*: FieldTypeDef
 		of List:
-			member: FieldTypeDef
+			member*: FieldTypeDef
 		of Complex:
-			schema: Schema
+			schema*: Schema
 
 proc `$`*(typed: FieldTypeDef): string =
 	when defined(debug):
@@ -54,11 +53,11 @@ proc newFieldTypeDef*(kind: FieldType; kinds: set[JsonNodeKind]={};
 	pattern=false, required=false, member: FieldTypeDef=nil;
 	schema: Schema=nil): FieldTypeDef =
 	case kind:
-	of Natural:
+	of Primitive:
 		assert kinds != {}
 		assert JObject notin kinds, "JObject is an exclusive sub-type"
 		assert JArray notin kinds, "JArray is an exclusive sub-type"
-		result = FieldTypeDef(kind: Natural, kinds: kinds, pattern: pattern, required: required)
+		result = FieldTypeDef(kind: Primitive, kinds: kinds, pattern: pattern, required: required)
 	of Complex:
 		result = FieldTypeDef(kind: Complex, kinds: {JObject}, pattern: pattern, required: required,
 			schema: schema)
@@ -85,7 +84,7 @@ converter toFieldTypeDef*(k: JsonNodeKind): FieldTypeDef =
 	of JArray:
 		result = List.newFieldTypeDef(kinds={k})
 	else:
-		result = Natural.newFieldTypeDef(kinds={k})
+		result = Primitive.newFieldTypeDef(kinds={k})
 
 converter toFieldTypeDef*(s: set[JsonNodeKind]): FieldTypeDef =
 	if JObject in s:
@@ -97,7 +96,7 @@ converter toFieldTypeDef*(s: set[JsonNodeKind]): FieldTypeDef =
 	elif s == {}:
 		result = Anything.newFieldTypeDef(kinds={})
 	else:
-		result = Natural.newFieldTypeDef(kinds=s)
+		result = Primitive.newFieldTypeDef(kinds=s)
 
 proc arrayOf*(member: FieldTypeDef): FieldTypeDef =
 	result = FieldTypeDef(kind: List, kinds: {JArray},
@@ -124,7 +123,7 @@ proc paint(src: FieldTypeDef; dst: FieldTypeDef) =
 	of Either:
 		dst.a = src.a
 		dst.b = src.b
-	of Anything, Natural: discard
+	of Anything, Primitive: discard
 
 proc required*(t: FieldTypeDef): FieldTypeDef =
 	## the field is required and must be present in the input
