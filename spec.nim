@@ -2,7 +2,7 @@
 import json
 import tables
 
-when defined(debug):
+when not defined(release):
 	import strformat
 
 export JsonNodeKind
@@ -33,11 +33,13 @@ type
 		of Complex:
 			schema*: Schema
 
-proc `$`*(typed: FieldTypeDef): string =
-	when defined(debug):
-		result = &"{typed.kind} {typed.kinds} req={typed.required} pat={typed.pattern}"
-		if typed.kind == Complex:
-			result &= " len=" & $typed.schema.len
+proc `$`*(ftype: FieldTypeDef): string =
+	if ftype == nil:
+		return "(nil)"
+	when not defined(release):
+		result = &"{ftype.kind} {ftype.kinds} req={ftype.required} pat={ftype.pattern}"
+		if ftype.kind == Complex and ftype.schema != nil:
+			result &= " len=" & $ftype.schema.len
 	else:
 		result = "(debug builds are rad)"
 
@@ -98,19 +100,8 @@ converter toFieldTypeDef*(s: set[JsonNodeKind]): FieldTypeDef =
 	else:
 		result = Primitive.newFieldTypeDef(kinds=s)
 
-proc arrayOf*(member: FieldTypeDef): FieldTypeDef =
-	result = FieldTypeDef(kind: List, kinds: {JArray},
-		pattern: member.pattern, required: member.required,
-		member: member)
-
 converter toFieldTypeDef*(c: Schema): FieldTypeDef =
 	result = Complex.newFieldTypeDef(schema=c)
-
-converter toFieldTypeDef*(list: openArray[FieldTypeDef]): FieldTypeDef =
-	assert list.len == 1, "provide only one list member typedef"
-	let member = list[0]
-	result = List.newFieldTypeDef(pattern=member.pattern,
-		required=member.required, member=member)
 
 proc paint(src: FieldTypeDef; dst: FieldTypeDef) =
 	## copy variant values for immutable conversion reasons
@@ -124,6 +115,13 @@ proc paint(src: FieldTypeDef; dst: FieldTypeDef) =
 		dst.a = src.a
 		dst.b = src.b
 	of Anything, Primitive: discard
+
+proc arrayOf*(member: FieldTypeDef): FieldTypeDef =
+	result = FieldTypeDef(kind: List, kinds: {JArray}, member: member,
+		pattern: member.pattern, required: member.required)
+
+converter toFieldTypeDef*(list: array[1, FieldTypeDef]): FieldTypeDef =
+	result = list[0].arrayOf
 
 proc required*(t: FieldTypeDef): FieldTypeDef =
 	## the field is required and must be present in the input
