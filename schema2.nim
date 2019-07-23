@@ -41,7 +41,7 @@ let ExternalDocs = {
 }.toSchema
 
 let SecurityRequirement = {
-	"{name}": patterned optional JString.arrayOf,
+	"{name}": optional JString.arrayOf,
 }.toSchema
 
 let XmlObject = {
@@ -177,11 +177,11 @@ let Header = {
 }.toSchema
 
 let Headers = {
-	"{name}": patterned Header,
+	"{name}": optional Header,
 }.toSchema
 
 let Example = {
-	"{mimetype}": patterned anything {},
+	"{mime type}": optional anything {},
 }.toSchema
 
 let Response = {
@@ -194,7 +194,7 @@ let Response = {
 let Responses = {
 	"default": optional (Response | Reference),
 
-	"{httpstatuscode}": optional patterned (Response | Reference),
+	"{http status code}": optional (Response | Reference),
 	"^x-": optional patterned anything {},
 }.toSchema
 
@@ -294,7 +294,7 @@ let OpenApi2* = {
 	"responses": optional Responses,
 	"securityDefinitions": optional SecurityDefinitions,
 	"security": optional SecurityRequirement.arrayOf,
-	"tag": optional Tag.arrayOf,
+	"tags": optional Tag.arrayOf,
 	"externalDocs": optional ExternalDocs,
 
 	"^x-": patterned optional anything {},
