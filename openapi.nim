@@ -19,6 +19,9 @@ if isMainModule:
 		except JsonParsingError as e:
 			echo "error parsing the input as json: ", e.msg
 			break
+		except ValueError:
+			echo "json parsing failed, probably due to an overlarge number"
+			break
 
 		if "swagger" in input:
 			if input["swagger"].getStr != "2.0":
