@@ -76,7 +76,7 @@ proc match*(source: string; path: string;
 		# we cannot disambiguate two adjacent variables,
 		# but make sure we can associate variable->value
 		assert tail.len == 0, "cannot disambiguate multiple variables"
-		# it seems that the variable be empty in some inputs
+		# it seems that the variable may be empty in some inputs
 		#assert path.len > 0, "insufficient input to fill variable"
 		# any remaining input is part of the sole remaining variable
 		return true
