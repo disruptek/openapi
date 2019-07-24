@@ -1,23 +1,26 @@
 #? replace(sub = "\t", by = " ")
 import sets
 import json
-import re
 import tables
+import strutils
+import unicode
+import sequtils
 
 when not defined(release):
 	import strformat
 
 import spec
-from paths import isTemplate, parseTemplate
+import paths
 
 type
 	FieldHash* = HashSet[string]
-	ParserResult* = object
+	ParserResult* = ref object
 		ok*: bool
 		msg*: string
 		key*: FieldName
 		ftype*: FieldTypeDef
 		input*: JsonNode
+		child*: ParserResult
 
 proc fail(pr: var ParserResult; msg: string; key: FieldName ="";
 	ftype: FieldTypeDef=nil; input: JsonNode=nil): ParserResult =
@@ -25,7 +28,13 @@ proc fail(pr: var ParserResult; msg: string; key: FieldName ="";
 	result.ok = false
 	if input != nil:
 		result.input = input
-	result.msg = msg
+	if msg == "":
+		if result.msg == "":
+			if pr.child != nil:
+				if pr.child.ok == false:
+					result.msg = pr.child.msg
+	else:
+		result.msg = msg
 	result.key = key
 	if ftype != nil:
 		result.ftype = ftype
@@ -38,40 +47,63 @@ proc `$`*(pr: ParserResult): string =
 		parse failure
 			error: {pr.msg}
 			field: {pr.key}
-			expected: {$pr.ftype}
-			input: {$pr.input}
+			expected: {pr.ftype}
+			input: {pr.input}
 		"""
+		var r = pr.child
+		while r != nil:
+			result &= "\n" & $r
+			r = r.child
 	else:
 		result = "parse failure"
+
+proc isRegExp*(pattern: string): bool =
+	result = pattern.len > 0 and pattern[0] == '^'
+
+proc match*(name: string; pattern: string): bool =
+	## a re-free "re.match" using pure optimism
+	if not pattern.isRegExp:
+		return false
+	let p = pattern[1..^1]
+	# many inputs have incorrect case
+	# FIXME: warn about this someday
+	result = 0 == name.toLower.find(p.toLower)
 
 proc parseField(ftype: FieldTypeDef; js: JsonNode): ParserResult
 
 proc parsePair(js: JsonNode; name: FieldName;
 	ftype: FieldTypeDef; missing: var FieldHash): ParserResult =
 	## validate input given a key/value from a schema
-	result = ParserResult(ok: true, input: js, key: name, ftype: ftype)
+	result = ParserResult(ok: true, input: js, key: name, ftype: ftype, child: nil)
 	# identify regex name specifiers
 	if ftype.pattern:
-		var rex = re(name, {reIgnoreCase})
+		assert not ftype.required, "regexp `" & name & "` required?"
+		assert name.isRegexp, "i can't grok `" & name & "` as regexp"
 		# examine missing keys from input, and
-		for key in missing:
+		for key in missing.toSeq:
 			# ignore any that don't match
-			if not key.match(rex):
+			if not key.match(name):
 				continue
 			# matches are no longer missing
 			missing.excl key
 			# verify that matches parse
-			var pf = ftype.parseField(js[key])
-			if pf.ok:
+			result.child = ftype.parseField(js[key])
+			if result.child.ok:
 				continue
 			# or bomb out
-			return result.fail(pf.msg, key=key, input=js[key])
-		for key in missing:
-			if not key.isTemplate:
+			return result.fail(result.child.msg, key=key, input=js[key])
+	# it's not a regexp; is it a template?
+	elif name.isTemplate:
+		assert not ftype.required, "path template `" & name & "` required?"
+		var caught = name.parseTemplate
+		if not caught.ok:
+			return result.fail("bad template", key=name)
+		for key in missing.toSeq:
+			if not caught.match(key):
+				# FIXME: are multiple templates ever valid?
+				assert false, "template doesn't match " & key
 				continue
-			var caught = key.parseTemplate
-			if caught.len == 0:
-				return result.fail("bad template", key=key, input=js[key])
+			missing.excl key
 	# it's not a pattern; is it in input?
 	elif name notin js:
 		# was it required?
@@ -81,6 +113,9 @@ proc parsePair(js: JsonNode; name: FieldName;
 proc parseSchema*(schema: Schema; js: JsonNode): ParserResult =
 	result = ParserResult(ok: true, input: js)
 	var missing: FieldHash
+
+	assert schema.len > 0, "schema appears to be empty"
+
 	if js.kind == JObject and "type" in schema:
 		if "type" notin js:
 			return result.fail("missing in input", key="type")
@@ -103,6 +138,9 @@ proc parseSchema*(schema: Schema; js: JsonNode): ParserResult =
 		result = js.parsePair(name, ftype, missing)
 		if not result.ok:
 			return
+
+	if missing.len > 0:
+		return result.fail("unrecognized inputs: " & $missing)
 
 proc parseField(ftype: FieldTypeDef; js: JsonNode): ParserResult =
 	## parse arbitrary field per arbitrary value definition
