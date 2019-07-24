@@ -48,13 +48,21 @@ proc headrest(list: seq[string]):
 	assert list.len >= 1, "list empty; ran outta items?"
 	result = (head: list[0], tail: list[1..^1])
 
+iterator rfind(s: string; p: string; i= -1): int =
+	## yield indices of matches in reverse order
+	var index = i
+	while index != 0:
+		index = s.rfind(p, 0, index)
+		if index == -1:
+			break
+		yield index
+
 proc match*(source: string; path: string;
 	constants: seq[string]; variables: seq[string]): bool =
 	## unsatisfied path variables/constants are an error
 	var
 		head: string
 		tail: seq[string]
-		index: int
 
 	# if we have empty source
 	if source.len == 0:
@@ -82,9 +90,12 @@ proc match*(source: string; path: string;
 		return true
 	let (fhead, ftail) = constants.headrest
 	discard ftail # noqa
-	index = path.find(fhead)
-	assert index != -1, "path doesn't match source variable"
-	return match(source[head.len..^1], path[index..^1], constants, tail)
+	# greedily attempt to match constants, starting at the back
+	for i in path.rfind(fhead):
+		if match(source[head.len..^1], path[i..^1], constants, tail):
+			return true
+	assert false, "path doesn't match source variable"
+	return false
 
 proc match*(tp: TemplateParse; input: string): bool =
 	## unsatisfied path variables/constants are an error
