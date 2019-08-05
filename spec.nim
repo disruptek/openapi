@@ -85,6 +85,8 @@ converter toFieldTypeDef*(k: JsonNodeKind): FieldTypeDef =
 		result = Complex.newFieldTypeDef(kinds={k})
 	of JArray:
 		result = List.newFieldTypeDef(kinds={k})
+	of JNull:
+		result = Anything.newFieldTypeDef(kinds={})
 	else:
 		result = Primitive.newFieldTypeDef(kinds={k})
 
