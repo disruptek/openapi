@@ -11,7 +11,7 @@ type
 		ok*: bool
 
 proc isTemplate*(path: string): bool =
-	## quickly test to see if the path may be templated
+	## quickly test to see if the path might be templated
 	let
 		a = path.find('{')
 		b = path.find('}')
