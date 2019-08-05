@@ -69,7 +69,7 @@ proc match*(name: string; pattern: string): bool =
 	# FIXME: warn about this someday
 	result = 0 == name.toLower.find(p.toLower)
 
-proc parseField(ftype: FieldTypeDef; js: JsonNode): ParserResult
+proc parseField*(ftype: FieldTypeDef; js: JsonNode): ParserResult
 
 proc parsePair(js: JsonNode; name: FieldName;
 	ftype: FieldTypeDef; missing: var FieldHash): ParserResult =
@@ -99,16 +99,27 @@ proc parsePair(js: JsonNode; name: FieldName;
 		if not caught.ok:
 			return result.fail("bad template", key=name)
 		for key in missing.toSeq:
-			if not caught.match(key):
-				# FIXME: are multiple templates ever valid?
-				assert false, "template doesn't match " & key
-				continue
+			# FIXME: are multiple templates ever valid?
+			assert caught.match(key), "template doesn't match " & key
 			missing.excl key
 	# it's not a pattern; is it in input?
 	elif name notin js:
 		# was it required?
 		if ftype.required:
 			return result.fail("missing in input")
+	else:
+		result.child = ftype.parseField(js[name])
+		if result.child.ok:
+			return
+		# or bomb out
+		return result.fail(result.child.msg)
+
+proc parsePair*(js: JsonNode; name: FieldName;
+	ftype: FieldTypeDef): ParserResult =
+	## convenience
+	var missing: FieldHash
+	missing.init()
+	result = js.parsePair(name, ftype, missing)
 
 proc parseSchema*(schema: Schema; js: JsonNode): ParserResult =
 	result = ParserResult(ok: true, input: js)
@@ -142,7 +153,7 @@ proc parseSchema*(schema: Schema; js: JsonNode): ParserResult =
 	if missing.len > 0:
 		return result.fail("unrecognized inputs: " & $missing)
 
-proc parseField(ftype: FieldTypeDef; js: JsonNode): ParserResult =
+proc parseField*(ftype: FieldTypeDef; js: JsonNode): ParserResult =
 	## parse arbitrary field per arbitrary value definition
 	result = ParserResult(ok: true, input: js, ftype: ftype)
 	case ftype.kind:
