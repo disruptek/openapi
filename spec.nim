@@ -14,11 +14,11 @@ type
 	Schema* = OrderedTableRef[FieldName, FieldTypeDef]   ## complex objects
 	FieldName* = string ## the field name doubles as the pattern
 	FieldType* = enum   ## variant discriminator for value types
-		Anything ## anything or nothing (nullable)
-		Primitive, ## a primitive value (integer, string, etc.)
-		List,    ## an array
-		Either,  ## one of 2+ possible values
-		Complex  ## a map-like object
+		Anything  ## anything or nothing (nullable)
+		Primitive ## a primitive value (integer, string, etc.)
+		List      ## an array
+		Either    ## one of 2+ possible values
+		Complex   ## a map-like object
 	FieldTypeDef* = ref object ## the type for any given value
 		kinds*: set[JsonNodeKind]
 		pattern*: bool
