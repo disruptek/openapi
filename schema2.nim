@@ -1,50 +1,63 @@
 #? replace(sub = "\t", by = " ")
-import spec
-
 # this is rather critical for reasons
 import tables
 
-let Info = {
+import spec
+
+
+template `<~`(name: untyped; fields: openArray[(FieldName, FieldTypeDef)]) =
+	# it's a var because we sometimes need to mutate it
+	var name {.compileTime.} = `fields`.newSchema
+
+template `<~`(name: untyped; ftype: FieldTypeDef) =
+	# it's a var because we sometimes need to mutate it
+	var name {.compileTime.} = ftype
+
+Contact <~ {
+	"name": optional JString,
+	"url": optional JString,
+	"email": optional JString,
+
+	"^x-": patterned optional anything {},
+}
+
+License <~ {
+	"name": required JString,
+
+	"url": optional JString,
+
+	"^x-": patterned optional anything {},
+}
+
+Info <~ {
 	"title": required JString,
 	"version": required JString,
 
 	"description": optional JString,
 	"termsOfService": optional JString,
-	"contact": optional {
-		"name": optional JString,
-		"url": optional JString,
-		"email": optional JString,
-
-		"^x-": patterned optional anything {},
-	}.toSchema,
-	"license": optional {
-		"name": required JString,
-
-		"url": optional JString,
-
-		"^x-": patterned optional anything {},
-	}.toSchema,
+	"contact": optional Contact,
+	"license": optional License,
 
 	"^x-": patterned optional anything {},
-}.toSchema
+}
 
-let Reference = {
+Reference <~ {
 	"$ref": required JString,
-}.toSchema
+}
 
-let ExternalDocs = {
+ExternalDocs <~ {
 	"url": required JString,
 
 	"description": optional JString,
 
 	"^x-": patterned anything {},
-}.toSchema
+}
 
-let SecurityRequirement = {
+SecurityRequirement <~ {
 	"{name}": optional JString.arrayOf,
-}.toSchema
+}
 
-let XmlObject = {
+XmlObject <~ {
 	"name": optional JString,
 	"namespace": optional JString,
 	"prefix": optional JString,
@@ -52,13 +65,13 @@ let XmlObject = {
 	"wrapped": optional JBool,
 
 	"^x-": optional patterned anything {},
-}.toSchema
+}
 
 # enum values could be literally anything.
 # not sure we can validate them beyond the guarantees json provides...
-let EnumArray = arrayOf(anything {})
+EnumArray <~ arrayOf(anything {})
 
-var Items = {
+Items <~ {
 	"type": required JString,
 
 	"format": optional JString,
@@ -78,13 +91,14 @@ var Items = {
 	"multipleOf": optional JInt,
 
 	"^x-": optional patterned anything {},
-}.toSchema
+}
 
 # recursive type in case the parent type is array, in which
 # case this field reflects the type of array members
-Items["items"] = Items
+static:
+	Items["items"] = optional Items
 
-let SchemaObject = {
+SchemaObject <~ {
 	"$ref": optional Reference,
 
 	# per json:
@@ -125,18 +139,19 @@ let SchemaObject = {
 	"multipleOf": optional JInt,
 
 	"^x-": optional patterned anything {},
-}.toSchema
+}
 
-# recursion thanks to json schema
-SchemaObject["allOf"] = optional SchemaObject.arrayOf
+static:
+	# recursion thanks to json schema
+	SchemaObject["allOf"] = optional SchemaObject.arrayOf
 
-# either a bool, or a SchemaObject
-SchemaObject["additionalProperties"] = optional (JBool | SchemaObject)
+	# either a bool, or a SchemaObject
+	SchemaObject["additionalProperties"] = optional (JBool | SchemaObject)
 
-# this will require some validation logic to assert that keys are valid regex
-SchemaObject["properties"] = optional SchemaObject
+	# this will require some validation logic to assert that keys are valid regex
+	SchemaObject["properties"] = optional SchemaObject
 
-let Parameter = {
+Parameter <~ {
 	"name": required JString,
 	"in": required JString,
 	"description": required JString,
@@ -164,51 +179,51 @@ let Parameter = {
 
 	# these differ from Items
 	"allowEmptyValue": optional JBool,
-}.toSchema
+}
 
-let Parameters = (Parameter | Reference).arrayOf
+Parameters <~ (Parameter | Reference).arrayOf
 
-let Header = {
+Header <~ {
 	"type": required JString,
 
 	"format": optional JString,
 	"description": optional JString,
 	"items": optional Items,
-}.toSchema
+}
 
-let Headers = {
+Headers <~ {
 	"{name}": optional Header,
-}.toSchema
+}
 
-let Example = {
+Example <~ {
 	"{mime type}": optional anything {},
-}.toSchema
+}
 
-let Response = {
+Response <~ {
 	"description": required JString,
 	"schema": optional SchemaObject,
 	"headers": optional Headers,
 	"examples": optional Example,
-}.toSchema
+}
 
-let Responses = {
+Responses <~ {
 	"default": optional (Response | Reference),
 
 	"{http status code}": optional (Response | Reference),
 	"^x-": optional patterned anything {},
-}.toSchema
+}
 
-let SchemesArray = JString.arrayOf
+SchemesArray <~ JString.arrayOf
 
-let Tag = {
+Tag <~ {
 	"name": required JString,
 	"description": optional Jstring,
 	"externalDocs": optional ExternalDocs,
 
 	"^x-": patterned optional anything {},
-}.toSchema
+}
 
-let Operation = {
+Operation <~ {
 	"responses": required Responses,
 
 	"tags": optional Tag.arrayOf,
@@ -224,9 +239,9 @@ let Operation = {
 	"security": optional SecurityRequirement.arrayOf,
 
 	"^x-": optional patterned anything {},
-}.toSchema
+}
 
-let PathItem = {
+PathItem <~ {
 	"$ref": optional JString,
 	"get": optional Operation,
 	"put": optional Operation,
@@ -238,15 +253,15 @@ let PathItem = {
 	"parameters": optional Parameters,
 
 	"^x-": patterned optional anything {},
-}.toSchema
+}
 
-let SecurityScope = {
+SecurityScope <~ {
 	"{name}": optional JString,
 
 	"^x-": patterned optional anything {},
-}.toSchema
+}
 
-let SecurityScheme = {
+SecurityScheme <~ {
 	"name": required JString,
 	"in": required JString,
 	"flow": required JString,
@@ -258,27 +273,27 @@ let SecurityScheme = {
 	"description": optional JString,
 
 	"^x-": patterned optional anything {},
-}.toSchema
+}
 
-let SecurityDefinitions = {
+SecurityDefinitions <~ {
 	"{name}": optional SecurityScheme,
-}.toSchema
+}
 
-let Definitions = {
+Definitions <~ {
 	"{name}": optional SchemaObject,
-}.toSchema
+}
 
-let Paths = {
+Paths <~ {
 	"/{path}": optional PathItem,
 
 	"^x-": patterned anything {},
-}.toSchema
+}
 
-let ParameterDefinition = {
+ParameterDefinition <~ {
 	"{name}": optional Parameter,
-}.toSchema
+}
 
-let OpenApi2* = {
+OpenApi2 <~ {
 	"host": required JString,
 	"swagger": required JString,
 	"info": required Info,
@@ -298,4 +313,5 @@ let OpenApi2* = {
 	"externalDocs": optional ExternalDocs,
 
 	"^x-": patterned optional anything {},
-}.toSchema
+}
+export OpenApi2
