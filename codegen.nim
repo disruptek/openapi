@@ -228,7 +228,7 @@ proc defineObject(input: JsonNode): NimNode =
 proc defineObjectOrMap(input: JsonNode): NimNode =
 	## reference an existing obj type or create a new one right here
 	assert input != nil, "i should be getting non-nil input, i think"
-	assert input.len > 0 and input.kind == JObject, "bizarre input: " & $input
+	assert input.kind == JObject, "bizarre input: " & $input
 
 	if "properties" in input and "additionalProperties" in input:
 		error "both `properties` and `additionalProperties` are defined"
@@ -242,6 +242,9 @@ proc defineObjectOrMap(input: JsonNode): NimNode =
 		result = input["properties"].defineObject()
 	elif "additionalProperties" in input:
 		result = input["additionalProperties"].defineMap()
+	elif input.len == 0:
+		# FIXME: not sure we want to swallow objects like {}
+		result = input.defineObject()
 	else:
 		error "missing properties or additionalProperties in object"
 
@@ -252,7 +255,7 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Nim
 		target = input.pluckRefTarget()
 		documentation = input.pluckDescription()
 
-	if input == nil or input.len == 0:
+	if input != nil and input.kind == JObject and input.len == 0:
 		documentation = newCommentStmtNode(name & " lacks any type info")
 		documentation.strVal.warning
 	if documentation == nil:
@@ -286,8 +289,17 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Nim
 		result.add quote do:
 			seq[`member`]
 	of Complex:
+		if input == nil or input.kind != JObject:
+			result = newCommentStmtNode(name & "bizarre input: " & $input)
+			result.strVal.error
+			return
 		if input.len == 0:
-			return documentation
+			# this is basically a "type" like {}
+			result = newNimNode(nnkTypeDef)
+			result.add typeName
+			result.add newEmptyNode()
+			result.add input.defineObjectOrMap()
+			return
 		# see if it's an untyped value
 		if "type" notin input:
 			result = newCommentStmtNode(name & " lacks `type` property")
