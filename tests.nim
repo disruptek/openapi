@@ -66,14 +66,14 @@ suite "paths":
 			res = src.match(pat, par.constants, par.variables)
 			check res == true
 
-	suite "parser":
-		let regexp = "^x-"
-		let vendors = @["X-bad-case", "x-normal-vendor"]
-		let notvendors = @["not-a-vendor", "also_not_a_vendor", "^x-also-not"]
+suite "parser":
+	let regexp = "^x-"
+	let vendors = @["X-bad-case", "x-normal-vendor"]
+	let notvendors = @["not-a-vendor", "also_not_a_vendor", "^x-also-not"]
 
-		test "match a regular expression":
-			check regexp.isRegExp
-			for v in vendors:
-				check v.match(regexp) == true
-			for v in notvendors:
-				check v.match(regexp) == false
+	test "match a regular expression":
+		check regexp.isRegExp
+		for v in vendors:
+			check v.match(regexp) == true
+		for v in notvendors:
+			check v.match(regexp) == false
