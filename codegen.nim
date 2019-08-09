@@ -13,11 +13,11 @@ import paths
 from schema2 import OpenApi2
 
 type
-	ConsumeResult = object
-		ok: bool
-		schema: Schema
-		input: JsonNode
-		output: NimNode
+	ConsumeResult* = object
+		ok*: bool
+		schema*: Schema
+		input*: JsonNode
+		output*: NimNode
 
 proc guessJsonNodeKind(name: string): JsonNodeKind =
 	## map openapi type names to their json node types
@@ -160,6 +160,12 @@ proc elementTypeDef(input: JsonNode; name="nil"): NimNode =
 		let element = input.kind.toFieldTypeDef
 		result = element.makeTypeDef(name, input)
 
+proc newExportedIdentNode(name: string): NimNode =
+	## newIdentNode with an export annotation
+	result = newNimNode(nnkPostfix)
+	result.add newIdentNode("*")
+	result.add newIdentNode(name)
+
 iterator objectProperties(input: JsonNode): NimNode =
 	## yield typedef nodes of a json object, and
 	## ignore "$ref" nodes in the input
@@ -169,8 +175,9 @@ iterator objectProperties(input: JsonNode): NimNode =
 		for k, v in input.pairs:
 			if k == "$ref":
 				continue
+			# a single property typedef
 			onedef = newNimNode(nnkIdentDefs)
-			onedef.add newIdentNode(k)
+			onedef.add newExportedIdentNode(k)
 			target = v.pluckRefTarget()
 			if target == nil:
 				typedef = v.parseTypeDef()
@@ -192,7 +199,7 @@ proc isValidIdentifier(name: string): bool =
 proc toValidIdentifier(name: string): NimNode =
 	## permute identifiers until they are valid
 	if name.isValidIdentifier:
-		result = newIdentNode(name)
+		result = newExportedIdentNode(name)
 	else:
 		result = toValidIdentifier("oa" & name)
 		warning name & " is a bad choice of type name", result
