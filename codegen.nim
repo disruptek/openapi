@@ -1,4 +1,14 @@
 #? replace(sub = "\t", by = " ")
+
+# TODO:
+# transport; bind string->handler, eg. http, ws, etc.
+# converters for json, xml and types
+# compose calls
+# parse replies
+# auth schemes
+# embed on-board dox
+# link to external dox
+
 import macros
 import tables
 import json
@@ -13,11 +23,37 @@ import paths
 from schema2 import OpenApi2
 
 type
-	ConsumeResult* = object
+	ConsumeResult* = object of RootObj
 		ok*: bool
 		schema*: Schema
 		input*: JsonNode
 		output*: NimNode
+
+	PathItem* = object of ConsumeResult
+		path*: string
+		parsed*: ParserResult
+		basePath*: string
+		host*: string
+		operations*: Table[string, Operation]
+		parameters*: seq[Parameter]
+
+	ParameterIn = enum
+		InQuery = "query"
+		InBody = "body"
+		InHeader = "header"
+		InPath = "path"
+		InData = "formData"
+
+	Parameter* = object of ConsumeResult
+		name*: string
+		description*: string
+		required*: bool
+		location*: ParameterIn
+
+	Operation* = object of ConsumeResult
+		op*: HttpOpName
+		id*: string
+		parameters*: seq[Parameter]
 
 proc guessJsonNodeKind(name: string): JsonNodeKind =
 	## map openapi type names to their json node types
@@ -73,16 +109,15 @@ proc conjugateFieldType(major: JsonNodeKind; format=""): FieldTypeDef =
 		warning $major & " type has unknown format `" & format & "`"
 	result = major.toFieldTypeDef
 
-#[
-proc conjugateFieldType(name: string; format=""): FieldTypeDef =
-	let major = name.guessJsonNodeKind()
-	result = major.conjugateFieldType(format=format)
-]#
+when false:
+	proc conjugateFieldType(name: string; format=""): FieldTypeDef =
+		let major = name.guessJsonNodeKind()
+		result = major.conjugateFieldType(format=format)
 
 converter toNimNode(ftype: FieldTypeDef): NimNode =
 	## render a fieldtypedef as nimnode
 	if ftype == nil:
-		return newCommentStmtNode("attempted to convert to nil")
+		return newCommentStmtNode("fieldtypedef was nil")
 	case ftype.kind:
 	of Primitive:
 		if ftype.kinds.card == 0:
@@ -97,17 +132,20 @@ converter toNimNode(ftype: FieldTypeDef): NimNode =
 			of JBool: newIdentNode("bool")
 			of JNull: newNimNode(nnkNilLit)
 			else:
-				newCommentStmtNode("you can't create a typedef for a " & $kind)
+				newCommentStmtNode("you can't create a Primitive from " & $kind)
 	of List:
-		assert false, "unimplemented"
+		assert ftype.member != nil
 		let elements = ftype.member.toNimNode
-		result = newCommentStmtNode("you can't create a typedef for a " & $ftype.kind)
-		result.strVal.warning result
-		result.add quote do:
+		#result = newCommentStmtNode("creating a List of " & $ftype.member.kind)
+		#result.strVal.warning result
+		result = quote do:
 			seq[`elements`]
+	of Complex:
+		result = newCommentStmtNode("creating a " & $ftype.kind)
+		result.strVal.warning result
 	else:
 		result = newCommentStmtNode("you can't create a typedef for a " & $ftype.kind)
-		result.strVal.warning result
+		result.strVal.error result
 
 proc pluckString(input: JsonNode; key: string): Option[string] =
 	## a robust getter for string values in json
@@ -142,23 +180,58 @@ proc pluckRefTarget(input: JsonNode): NimNode =
 
 proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): NimNode
 
-proc parseTypeDef(input: JsonNode): NimNode =
-	## convert a typedef from json to nim
-	result = input.pluckRefTarget()
+proc parseTypeDef(input: JsonNode): FieldTypeDef =
+	## convert a typedef from json; eg. we may expect to look
+	## for a type="something" and/or format="something-else"
+	case input.kind:
+	of JObject:
+		if "type" in input:
+			let
+				major = input["type"].getStr
+				minor = input.getOrDefault("format").getStr
+				kind = major.guessJsonNodeKind()
+			result = kind.toFieldTypeDef()
+		else:
+			result = input.kind.toFieldTypeDef()
+	of JArray:
+		result = input.kind.toFieldTypeDef()
+		if "items" in input:
+			result.member = input["items"].parseTypeDef()
+	else:
+		result = input.kind.toFieldTypeDef()
+
+proc parseTypeDefOrRef(input: JsonNode): NimNode =
+	## convert a typedef from json to nim; eg. we may expect to look
+	## for a type="something" and/or format="something-else"
+	var ftype: FieldTypeDef
 	if input == nil:
 		return
-	if result == nil:
-		result = input.kind.toFieldTypeDef.toNimNode
-
-proc elementTypeDef(input: JsonNode; name="nil"): NimNode =
 	result = input.pluckRefTarget()
-	if result == nil:
-		result = input.parseTypeDef()
-		if result != nil:
-			return
-		assert false, "unimplemented"
-		let element = input.kind.toFieldTypeDef
-		result = element.makeTypeDef(name, input)
+	if result != nil:
+		return
+	ftype = input.parseTypeDef()
+	case ftype.kind:
+	of List:
+		assert input.kind == JObject
+		if ftype.member == nil:
+			if "items" in input:
+				let target = input["items"].pluckRefTarget()
+				if target != nil:
+					return quote do:
+						seq[`target`]
+				else:
+					ftype.member = input["items"].parseTypeDef()
+					assert ftype.member != nil, "bad items: " & $input["items"]
+	else:
+		discard
+	result = ftype.toNimNode
+
+proc elementTypeDef(input: JsonNode; name="nil"): NimNode {.deprecated.} =
+	result = input.parseTypeDefOrRef()
+	if result != nil:
+		return
+	let element = input.parseTypeDef()
+	result = element.makeTypeDef(name, input)
 
 proc newExportedIdentNode(name: string): NimNode =
 	## newIdentNode with an export annotation
@@ -166,32 +239,10 @@ proc newExportedIdentNode(name: string): NimNode =
 	result.add newIdentNode("*")
 	result.add newIdentNode(name)
 
-iterator objectProperties(input: JsonNode): NimNode =
-	## yield typedef nodes of a json object, and
-	## ignore "$ref" nodes in the input
-	var onedef, typedef, target: NimNode
-	if input != nil:
-		assert input.kind == JObject, "nonsensical json type in objectProperties"
-		for k, v in input.pairs:
-			if k == "$ref":
-				continue
-			# a single property typedef
-			onedef = newNimNode(nnkIdentDefs)
-			onedef.add newExportedIdentNode(k)
-			target = v.pluckRefTarget()
-			if target == nil:
-				typedef = v.parseTypeDef()
-				assert typedef != nil, "unable to parse type: " & $v
-				onedef.add typedef
-			else:
-				onedef.add target
-			onedef.add newEmptyNode()
-			yield onedef
-
 proc isValidIdentifier(name: string): bool =
 	## verify that the identifier has a reasonable name
 	result = true
-	if name in ["string", "int", "float", "bool", "object", "array"]:
+	if name in ["string", "int", "float", "bool", "object", "array", "from", "type"]:
 		result = false
 	when declaredInScope(name):
 		result = false
@@ -204,11 +255,33 @@ proc toValidIdentifier(name: string): NimNode =
 		result = toValidIdentifier("oa" & name)
 		warning name & " is a bad choice of type name", result
 
+iterator objectProperties(input: JsonNode): NimNode =
+	## yield typedef nodes of a json object, and
+	## ignore "$ref" nodes in the input
+	var onedef, typedef, target: NimNode
+	if input != nil:
+		assert input.kind == JObject, "nonsensical json type in objectProperties"
+		for k, v in input.pairs:
+			if k == "$ref":
+				continue
+			# a single property typedef
+			onedef = newNimNode(nnkIdentDefs)
+			onedef.add k.toValidIdentifier()
+			target = v.pluckRefTarget()
+			if target == nil:
+				typedef = v.parseTypeDefOrRef()
+				assert typedef != nil, "unable to parse type: " & $v
+				onedef.add typedef
+			else:
+				onedef.add target
+			onedef.add newEmptyNode()
+			yield onedef
+
 proc defineMap(input: JsonNode): NimNode =
 	## reference an existing map type or create a new one right here
 	var target = input.pluckRefTarget()
 	if target == nil:
-		target = input.parseTypeDef()
+		target = input.parseTypeDefOrRef()
 	assert target != nil, "unable to parse map value type: " & $input
 
 	return quote do:
@@ -230,7 +303,12 @@ proc defineObject(input: JsonNode): NimNode =
 			warning "found a properties ref and 1+ props: " & def.strVal, result
 			break
 		reclist.add def
-	result.add reclist
+	# we would have exited sooner, but i wanted to make sure we could provide
+	# a decent warning message above...
+	if target != nil:
+		result = target
+	else:
+		result.add reclist
 
 proc defineObjectOrMap(input: JsonNode): NimNode =
 	## reference an existing obj type or create a new one right here
@@ -252,6 +330,7 @@ proc defineObjectOrMap(input: JsonNode): NimNode =
 	elif input.len == 0:
 		# FIXME: not sure we want to swallow objects like {}
 		result = input.defineObject()
+		warning "FIXME", result
 	else:
 		error "missing properties or additionalProperties in object"
 
@@ -310,7 +389,7 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Nim
 		# see if it's an untyped value
 		if "type" notin input:
 			result = newCommentStmtNode(name & " lacks `type` property")
-			result.strVal.warning
+			result.strVal.warning result
 			return
 		let
 			major = input["type"].getStr
@@ -333,7 +412,83 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Nim
 		result.strVal.warning
 		return
 
+proc newPathItem(pr: ParserResult; path: string; input: JsonNode; root: JsonNode): PathItem =
+	## create a PathItem result for a parsed node
+	var
+		op: Operation
+	result = PathItem(ok: pr.ok, parsed: pr, path: path)
+	if root != nil and root.kind == JObject and "basePath" in root:
+		if root["basePath"].kind == JString:
+			result.basePath = root["basePath"].getStr
+	if root != nil and root.kind == JObject and "host" in root:
+		if root["host"].kind == JString:
+			result.host = root["host"].getStr
+	if input == nil or input.kind != JObject:
+		error "unimplemented path item input: " & $input
+		return
+	if "$ref" in input:
+		error "path item $ref is unimplemented"
+		return
+	for opName in HttpOpName:
+		if $opName notin input:
+			continue
+		#warning "operation " & $opName & "-->" & $input[$opName]
+
+iterator paths(root: FieldTypeDef; input: JsonNode): PathItem =
+	var
+		schema: Schema
+		pschema: Schema = nil
+		parsed: ParserResult
+
+	assert root.kind == Complex, "malformed schema: " & $root.schema
+
+	while "paths" in root.schema:
+		# make sure our schema is sane
+		if root.schema["paths"].kind == Complex:
+			pschema = root.schema["paths"].schema
+		else:
+			error "malformed paths schema: " & $root.schema["paths"]
+			break
+
+		# make sure our input is sane
+		if input == nil or input.kind != JObject:
+			warning "missing or invalid json input: " & $input
+			break
+		if "paths" notin input or input["paths"].kind != JObject:
+			warning "missing or invalid paths in input: " & $input["paths"]
+			break
+
+		# find a good schema definition for ie. /{name}
+		for k, v in pschema.pairs:
+			if not k.startsWith("/"):
+				continue
+			schema = v.schema
+			break
+
+		# iterate over input and yield PathItems per each node
+		for k, v in input["paths"].pairs:
+			# spec says valid paths should start with /
+			if not k.startsWith("/"):
+				if not k.toLower.startsWith("x-"):
+					warning "unrecognized path: " & k
+				continue
+			parsed = v.parsePair(k, schema)
+			yield parsed.newPathItem(k, v, input)
+		break
+
+proc `$`(path: PathItem): string =
+	if path.host != "":
+		result = path.host
+	if path.basePath != "/":
+		result.add path.basePath
+	result.add path.path
+
 proc consume(content: string): ConsumeResult {.compileTime.} =
+	var
+		parsed: ParserResult
+		schema: FieldTypeDef
+		typedefs: seq[FieldTypeDef]
+
 	result = ConsumeResult(ok: false)
 
 	while true:
@@ -373,13 +528,11 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 		if "definitions" in result.input:
 			let
 				definitions = result.schema["definitions"]
-				schemas = toSeq(definitions.schema.values)
-			assert schemas.len == 1, "dunno what to do with " & $schemas.len &
-				" definitions schemas"
-			let
-				schema = schemas[0]
+			typedefs = toSeq(definitions.schema.values)
+			assert typedefs.len == 1, "dunno what to do with " &
+				$typedefs.len & " definitions schemas"
+			schema = typedefs[0]
 			var
-				parsed: ParserResult
 				typeSection = newNimNode(nnkTypeSection)
 			for k, v in result.input["definitions"]:
 				parsed = v.parsePair(k, schema)
@@ -388,6 +541,9 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 					break
 				typeSection.add schema.makeTypeDef(k, input=v)
 			result.output.add typeSection
+
+		#for path in result.schema.paths(result.input):
+		#	hint "path: " & $path
 
 		result.ok = true
 		break
