@@ -1,7 +1,8 @@
 #? replace(sub = "\t", by = " ")
 import tables
-import npeg
 import strutils
+
+import npeg
 
 type
 	TemplateParse* = object
