@@ -32,6 +32,15 @@ type
 			member*: FieldTypeDef
 		of Complex:
 			schema*: Schema
+	## string values as per the spec
+	HttpOpName* = enum
+		Get = "get"
+		Put = "put"
+		Post = "post"
+		Delete = "delete"
+		Options = "options"
+		Head = "head"
+		Patch = "patch"
 
 proc `$`*(ftype: FieldTypeDef): string =
 	if ftype == nil:
