@@ -134,7 +134,7 @@ SchemaObject <~ {
 	# extra per json schema
 	"maxProperties": optional JInt,
 	"minProperties": optional JInt,
-	"required": optional JBool,
+	"required": optional JString.arrayOf,
 	"enum": optional EnumArray,
 	"multipleOf": optional JInt,
 
@@ -145,10 +145,10 @@ static:
 	# recursion thanks to json schema
 	SchemaObject["allOf"] = optional SchemaObject.arrayOf
 
-	# either a bool, or a SchemaObject
+	# either a bool, or a SchemaObject; these are table semantics
 	SchemaObject["additionalProperties"] = optional (JBool | SchemaObject)
 
-	# this will require some validation logic to assert that keys are valid regex
+	# these are basic object field semantics; arbitrary values
 	SchemaObject["properties"] = optional SchemaObject
 
 Parameter <~ {
