@@ -55,6 +55,33 @@ type
 		id*: string
 		parameters*: seq[Parameter]
 
+proc newExportedIdentNode(name: string): NimNode =
+	## newIdentNode with an export annotation
+	result = newNimNode(nnkPostfix)
+	result.add newIdentNode("*")
+	result.add newIdentNode(name)
+
+proc isValidIdentifier(name: string): bool =
+	## verify that the identifier has a reasonable name
+	result = true
+	if name in ["string", "int", "float", "bool", "object", "array", "from", "type"]:
+		result = false
+	if name.startsWith("_"):
+		result = false
+	when declaredInScope(name):
+		result = false
+
+proc toValidIdentifier(name: string; star=true): NimNode =
+	## permute identifiers until they are valid
+	if name.isValidIdentifier:
+		if star:
+			result = newExportedIdentNode(name)
+		else:
+			result = newIdentNode(name)
+	else:
+		result = toValidIdentifier("oa" & name.replace("__", "_"), star=star)
+		warning name & " is a bad choice of type name", result
+
 proc guessJsonNodeKind(name: string): JsonNodeKind =
 	## map openapi type names to their json node types
 	result = case name:
@@ -169,7 +196,7 @@ proc parseRefTarget(target: string): NimNode =
 	assert templ.ok, "you couldn't parse your own template, doofus"
 	let caught = templ.match(target)
 	assert caught, "our template didn't match the ref: " & target
-	result = newIdentNode(target.split("/")[^1])
+	result = toValidIdentifier(target.split("/")[^1], star=false)
 
 proc pluckRefTarget(input: JsonNode): NimNode =
 	## sniff the type name and cast it to a nim identifier
@@ -232,28 +259,6 @@ proc elementTypeDef(input: JsonNode; name="nil"): NimNode {.deprecated.} =
 		return
 	let element = input.parseTypeDef()
 	result = element.makeTypeDef(name, input)
-
-proc newExportedIdentNode(name: string): NimNode =
-	## newIdentNode with an export annotation
-	result = newNimNode(nnkPostfix)
-	result.add newIdentNode("*")
-	result.add newIdentNode(name)
-
-proc isValidIdentifier(name: string): bool =
-	## verify that the identifier has a reasonable name
-	result = true
-	if name in ["string", "int", "float", "bool", "object", "array", "from", "type"]:
-		result = false
-	when declaredInScope(name):
-		result = false
-
-proc toValidIdentifier(name: string): NimNode =
-	## permute identifiers until they are valid
-	if name.isValidIdentifier:
-		result = newExportedIdentNode(name)
-	else:
-		result = toValidIdentifier("oa" & name)
-		warning name & " is a bad choice of type name", result
 
 iterator objectProperties(input: JsonNode): NimNode =
 	## yield typedef nodes of a json object, and
