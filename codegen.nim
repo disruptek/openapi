@@ -55,6 +55,10 @@ type
 		id*: string
 		parameters*: seq[Parameter]
 
+proc makeTypeDef*(ftype: FieldTypeDef; name: string; node: JsonNode = nil): NimNode
+proc parseTypeDef(input: JsonNode): FieldTypeDef
+proc parseTypeDefOrRef(input: JsonNode): NimNode
+
 proc newExportedIdentNode(name: string): NimNode =
 	## newIdentNode with an export annotation
 	result = newNimNode(nnkPostfix)
@@ -64,9 +68,11 @@ proc newExportedIdentNode(name: string): NimNode =
 proc isValidIdentifier(name: string): bool =
 	## verify that the identifier has a reasonable name
 	result = true
-	if name in ["string", "int", "float", "bool", "object", "array", "from", "type"]:
+	if name in ["string", "int", "float", "bool", "object", "array", "from", "type", "template"]:
 		result = false
-	if name.startsWith("_"):
+	elif name.startsWith("_"):
+		result = false
+	elif "__" in name:
 		result = false
 	when declaredInScope(name):
 		result = false
@@ -205,54 +211,6 @@ proc pluckRefTarget(input: JsonNode): NimNode =
 		return
 	result = target.get().parseRefTarget()
 
-proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): NimNode
-
-proc parseTypeDef(input: JsonNode): FieldTypeDef =
-	## convert a typedef from json; eg. we may expect to look
-	## for a type="something" and/or format="something-else"
-	case input.kind:
-	of JObject:
-		if "type" in input:
-			let
-				major = input["type"].getStr
-				minor = input.getOrDefault("format").getStr
-				kind = major.guessJsonNodeKind()
-			result = kind.toFieldTypeDef()
-		else:
-			result = input.kind.toFieldTypeDef()
-	of JArray:
-		result = input.kind.toFieldTypeDef()
-		if "items" in input:
-			result.member = input["items"].parseTypeDef()
-	else:
-		result = input.kind.toFieldTypeDef()
-
-proc parseTypeDefOrRef(input: JsonNode): NimNode =
-	## convert a typedef from json to nim; eg. we may expect to look
-	## for a type="something" and/or format="something-else"
-	var ftype: FieldTypeDef
-	if input == nil:
-		return
-	result = input.pluckRefTarget()
-	if result != nil:
-		return
-	ftype = input.parseTypeDef()
-	case ftype.kind:
-	of List:
-		assert input.kind == JObject
-		if ftype.member == nil:
-			if "items" in input:
-				let target = input["items"].pluckRefTarget()
-				if target != nil:
-					return quote do:
-						seq[`target`]
-				else:
-					ftype.member = input["items"].parseTypeDef()
-					assert ftype.member != nil, "bad items: " & $input["items"]
-	else:
-		discard
-	result = ftype.toNimNode
-
 proc elementTypeDef(input: JsonNode; name="nil"): NimNode {.deprecated.} =
 	result = input.parseTypeDefOrRef()
 	if result != nil:
@@ -263,7 +221,7 @@ proc elementTypeDef(input: JsonNode; name="nil"): NimNode {.deprecated.} =
 iterator objectProperties(input: JsonNode): NimNode =
 	## yield typedef nodes of a json object, and
 	## ignore "$ref" nodes in the input
-	var onedef, typedef, target: NimNode
+	var onedef, typedef: NimNode
 	if input != nil:
 		assert input.kind == JObject, "nonsensical json type in objectProperties"
 		for k, v in input.pairs:
@@ -272,22 +230,16 @@ iterator objectProperties(input: JsonNode): NimNode =
 			# a single property typedef
 			onedef = newNimNode(nnkIdentDefs)
 			onedef.add k.toValidIdentifier()
-			target = v.pluckRefTarget()
-			if target == nil:
-				typedef = v.parseTypeDefOrRef()
-				assert typedef != nil, "unable to parse type: " & $v
-				onedef.add typedef
-			else:
-				onedef.add target
+			typedef = v.parseTypeDefOrRef()
+			assert typedef != nil, "unable to parse type: " & $v
+			onedef.add typedef
 			onedef.add newEmptyNode()
 			yield onedef
 
 proc defineMap(input: JsonNode): NimNode =
 	## reference an existing map type or create a new one right here
-	var target = input.pluckRefTarget()
-	if target == nil:
-		target = input.parseTypeDefOrRef()
-	assert target != nil, "unable to parse map value type: " & $input
+	let target = input.parseTypeDefOrRef()
+	assert target != nil, "unable to parse map value type:\n" & input.pretty
 
 	return quote do:
 		Table[string, `target`]
@@ -334,15 +286,96 @@ proc defineObjectOrMap(input: JsonNode): NimNode =
 		result = input["additionalProperties"].defineMap()
 	elif input.len == 0:
 		# FIXME: not sure we want to swallow objects like {}
-		result = input.defineObject()
-		warning "FIXME", result
+		result = input.defineMap()
+	elif "items" in input:
+		assert input["items"].kind == JObject
+		result = input["items"].parseTypeDefOrRef()
+		assert result != nil
+		return quote do:
+			seq[`result`]
+	elif "allOf" in input:
+		warning "allOf support is terrible!"
+		assert input["allOf"].kind == JArray
+		for n in input["allOf"]:
+			result = n.defineObjectOrMap()
+			if result != nil:
+				break
 	else:
-		error "missing properties or additionalProperties in object"
+		error "missing properties or additionalProperties in object:\n" & input.pretty
 
-proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): NimNode =
-	## these are backed by SchemaObject
+proc parseTypeDef(input: JsonNode): FieldTypeDef =
+	## convert a typedef from json; eg. we may expect to look
+	## for a type="something" and/or format="something-else"
+	case input.kind:
+	of JObject:
+		if "type" in input:
+			let
+				major = input["type"].getStr
+				#minor = input.getOrDefault("format").getStr
+				kind = major.guessJsonNodeKind()
+			result = kind.toFieldTypeDef()
+		else:
+			result = input.kind.toFieldTypeDef()
+	of JArray:
+		result = input.kind.toFieldTypeDef()
+		if "items" in input:
+			result.member = input["items"].parseTypeDef()
+	else:
+		result = input.kind.toFieldTypeDef()
+
+proc parseTypeDefOrRef(input: JsonNode): NimNode =
+	## convert a typedef from json to nimnode; this one will
+	## provide the RHS of a typedef and performs a substitution
+	## of an available $ref if available
+	var ftype: FieldTypeDef
+	if input == nil:
+		return
+	result = input.pluckRefTarget()
+	if result != nil:
+		return
+	ftype = input.parseTypeDef()
+	case ftype.kind:
+	of List:
+		assert input.kind == JObject
+		if ftype.member == nil:
+			if "items" in input:
+				let target = input["items"].pluckRefTarget()
+				if target != nil:
+					return quote do:
+						seq[`target`]
+				else:
+					ftype.member = input["items"].parseTypeDef()
+					assert ftype.member != nil, "bad items: " & $input["items"]
+	of Complex:
+		if "type" notin input:
+			warning "lacks `type` property:\n" & input.pretty
+		if input.len == 0:
+			# this is basically a "type" like {}
+			return input.defineObjectOrMap()
+		if "properties" in input:
+			discard
+		elif "additionalProperties" in input:
+			discard
+		elif "allOf" in input:
+			warning "allOf poorly implemented!"
+			assert input["allOf"].kind == JArray
+			for n in input["allOf"]:
+				return n.parseTypeDefOrRef()
+		else:
+			result = newCommentStmtNode("lacks `type` property")
+			result.strVal.warning result
+			return
+		return input.defineObjectOrMap()
+	else:
+		discard
+	result = ftype.toNimNode
+
+proc makeTypeDef*(ftype: FieldTypeDef; name: string; node: JsonNode = nil): NimNode =
+	## toplevel type builder which emits symbols and associated types,
+	## of Primitive, List, Complex forms
 	let typeName = name.toValidIdentifier
 	var
+		input = node
 		target = input.pluckRefTarget()
 		documentation = input.pluckDescription()
 
@@ -402,6 +435,13 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Nim
 			elif "additionalProperties" in input:
 				warning name & " lacks `type` property"
 				major = "object"
+			elif "allOf" in input:
+				warning name & " lacks `type` property; allOf poorly implemented!"
+				major = "object"
+				assert input["allOf"].kind == JArray
+				for n in input["allOf"]:
+					input = n
+					break
 			else:
 				result = newCommentStmtNode(name & " lacks `type` property")
 				result.strVal.warning result
@@ -553,7 +593,7 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 				if not parsed.ok:
 					error "parse error on definition for " & k
 					break
-				typeSection.add schema.makeTypeDef(k, input=v)
+				typeSection.add schema.makeTypeDef(k, node=v)
 			result.output.add typeSection
 
 		#for path in result.schema.paths(result.input):
