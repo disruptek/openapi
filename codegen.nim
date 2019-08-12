@@ -391,13 +391,22 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Nim
 			result.add newEmptyNode()
 			result.add input.defineObjectOrMap()
 			return
+		var major: string
 		# see if it's an untyped value
-		if "type" notin input:
-			result = newCommentStmtNode(name & " lacks `type` property")
-			result.strVal.warning result
-			return
-		let
+		if "type" in input:
 			major = input["type"].getStr
+		else:
+			if "properties" in input:
+				warning name & " lacks `type` property"
+				major = "object"
+			elif "additionalProperties" in input:
+				warning name & " lacks `type` property"
+				major = "object"
+			else:
+				result = newCommentStmtNode(name & " lacks `type` property")
+				result.strVal.warning result
+				return
+		let
 			minor = input.getOrDefault("format").getStr
 			kind = major.guessJsonNodeKind()
 		# do we need to define an object type here?
