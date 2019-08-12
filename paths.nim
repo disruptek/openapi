@@ -73,8 +73,10 @@ proc match*(source: string; path: string;
 	# if we're looking at a constant segment
 	if source[0] != '{':
 		(head, tail) = constants.headrest
-		assert source.find(head) == 0, "source doesn't match parse"
-		assert path.find(head) == 0, "path doesn't match source variable"
+		assert source.startsWith(head),
+			"source `" & source & "` doesn't match section `" & head & "`"
+		assert path.startsWith(head),
+			"path `" & path & "` doesn't match section `" & head & "`"
 		return match(source[head.len..^1], path[head.len..^1], tail, variables)
 
 	# source holds a variable
