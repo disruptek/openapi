@@ -236,18 +236,36 @@ iterator objectProperties(input: JsonNode): NimNode =
 			onedef.add newEmptyNode()
 			yield onedef
 
+proc contains[T](t: tuple; v: T): bool =
+	result = false
+	for n in t.fields:
+		if v == n:
+			return true
+
 proc defineMap(input: JsonNode): NimNode =
 	## reference an existing map type or create a new one right here
+	var
+		target: NimNode
 	assert input != nil
 	assert input.kind == JObject
 
-	# check for special {} scenario
-	if input.len == 0:
-		return quote do:
-			Table[string, string]
-
-	let target = input.parseTypeDefOrRef()
-	assert target != nil, "unable to parse map value type:\n" & input.pretty
+	let contents = (typed: "type" in input, refd: "$ref" in input)
+	if false notin contents:
+		# we'll let the $ref override...
+		target = input.pluckRefTarget()
+	elif true notin contents:
+		# no type and no ref; use string
+		target = newIdentNode("string")
+	elif contents.refd:
+		target = input.pluckRefTarget()
+	else:
+		assert contents.typed == true
+		let ftype = input.parseTypeDef()
+		if ftype.kind == Primitive:
+			target = ftype.toNimNode
+		else:
+			# it's a List, Complex, or worse
+			target = newIdentNode("string")
 
 	return quote do:
 		Table[string, `target`]
@@ -281,7 +299,8 @@ proc defineObjectOrMap(input: JsonNode): NimNode =
 	assert input.kind == JObject, "bizarre input: " & $input
 
 	if "properties" in input and "additionalProperties" in input:
-		error "both `properties` and `additionalProperties` are defined"
+		error "both `properties` and `additionalProperties`" &
+			" are defined:\n" & input.pretty
 
 	# if we have a ref at this root, well, just use that
 	result = input.pluckRefTarget()
@@ -309,7 +328,8 @@ proc defineObjectOrMap(input: JsonNode): NimNode =
 			if result != nil:
 				break
 	else:
-		error "missing properties or additionalProperties in object:\n" & input.pretty
+		error "missing properties or additionalProperties in object:\n" &
+			input.pretty
 
 proc parseTypeDef(input: JsonNode): FieldTypeDef =
 	## convert a typedef from json; eg. we may expect to look
@@ -369,6 +389,8 @@ proc parseTypeDefOrRef(input: JsonNode): NimNode =
 			assert input["allOf"].kind == JArray
 			for n in input["allOf"]:
 				return n.parseTypeDefOrRef()
+		elif "type" in input:
+			return input.parseTypeDef()
 		else:
 			result = newCommentStmtNode("lacks `type` property")
 			result.strVal.warning result
@@ -410,7 +432,8 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; node: JsonNode = nil): NimN
 	of List:
 		# FIXME: clean this up
 		if "items" notin input:
-			result = newCommentStmtNode(name & " lacks `items` property")
+			result = newCommentStmtNode(name &
+				" lacks `items` property:\n" & input.pretty)
 			result.strVal.error
 			return
 		let member = input["items"].elementTypeDef()
@@ -422,7 +445,7 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; node: JsonNode = nil): NimN
 			seq[`member`]
 	of Complex:
 		if input == nil or input.kind != JObject:
-			result = newCommentStmtNode(name & "bizarre input: " & $input)
+			result = newCommentStmtNode(name & "bizarre input:\n" & input.pretty)
 			result.strVal.error
 			return
 		if input.len == 0:
@@ -486,10 +509,10 @@ proc newPathItem(pr: ParserResult; path: string; input: JsonNode; root: JsonNode
 		if root["host"].kind == JString:
 			result.host = root["host"].getStr
 	if input == nil or input.kind != JObject:
-		error "unimplemented path item input: " & $input
+		error "unimplemented path item input:\n" & input.pretty
 		return
 	if "$ref" in input:
-		error "path item $ref is unimplemented"
+		error "path item $ref is unimplemented:\n" & input.pretty
 		return
 	for opName in HttpOpName:
 		if $opName notin input:
@@ -557,7 +580,8 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 		try:
 			result.input = content.parseJson()
 			if result.input.kind != JObject:
-				error "i was expecting a json object, but i got " & $result.input.kind
+				error "i was expecting a json object, but i got " &
+					$result.input.kind
 				break
 		except JsonParsingError as e:
 			error "error parsing the input as json: " & e.msg
