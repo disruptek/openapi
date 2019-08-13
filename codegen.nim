@@ -238,6 +238,14 @@ iterator objectProperties(input: JsonNode): NimNode =
 
 proc defineMap(input: JsonNode): NimNode =
 	## reference an existing map type or create a new one right here
+	assert input != nil
+	assert input.kind == JObject
+
+	# check for special {} scenario
+	if input.len == 0:
+		return quote do:
+			Table[string, string]
+
 	let target = input.parseTypeDefOrRef()
 	assert target != nil, "unable to parse map value type:\n" & input.pretty
 
