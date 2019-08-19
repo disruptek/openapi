@@ -1,6 +1,7 @@
 #? replace(sub = "\t", by = " ")
 
 # TODO:
+# finish type-wrapper
 # transport; bind string->handler, eg. http, ws, etc.
 # converters for json, xml and types
 # compose calls
@@ -19,6 +20,7 @@ import options
 import spec
 import parser
 import paths
+import typewrap
 
 from schema2 import OpenApi2
 
@@ -26,8 +28,8 @@ type
 	ConsumeResult* = object of RootObj
 		ok*: bool
 		schema*: Schema
-		input*: JsonNode
-		output*: NimNode
+		js*: JsonNode
+		ast*: NimNode
 
 	PathItem* = object of ConsumeResult
 		path*: string
@@ -55,7 +57,45 @@ type
 		id*: string
 		parameters*: seq[Parameter]
 
-proc makeTypeDef*(ftype: FieldTypeDef; name: string; node: JsonNode = nil): NimNode
+	RightHand* = object of ConsumeResult
+		name: string
+		comment: string
+		ftype: FieldTypeDef
+		wrapped: WrappedItem
+
+	WrappedField = WrappedType[FieldTypeDef, WrappedItem]
+	WrappedItem = ref object
+		name: string  ## this is necessarily the WrappedType.name
+		case kind: FieldType
+		of Primitive:
+			primitive: JsonNode
+		of List:
+			list: WrappedField
+		of Either:
+			either: WrappedField
+		of Anything:
+			anything: WrappedField
+		of Complex:
+			complex: WrappedField
+
+proc newWrappedPrimitive(ftype: FieldTypeDef, name: string; js: JsonNode): WrappedItem =
+	## a wrapped item that points to a primitive
+	result = WrappedItem(kind: Primitive, name: name, primitive: js)
+	assert ftype.kind == result.kind
+
+proc newWrappedList(ftype: FieldTypeDef; name: string; js: JsonNode): WrappedItem =
+	## a wrapped item that holds a list of other wrapped items
+	#let wrapped = newLimb(ftype, name, @[])
+	#result = WrappedItem(kind: List, name: name, list: wrapped)
+	assert ftype.kind == result.kind
+
+proc newWrappedComplex(ftype: FieldTypeDef; name: string; js: JsonNode = nil): WrappedItem =
+	## a wrapped item that may contain named wrapped items
+	let wrapped = newBranch[FieldTypeDef, WrappedItem](ftype, name)
+	result = WrappedItem(kind: Complex, name: name, complex: wrapped)
+	assert ftype.kind == result.kind
+
+proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): NimNode
 proc parseTypeDef(input: JsonNode): FieldTypeDef
 proc parseTypeDefOrRef(input: JsonNode): NimNode
 
@@ -86,7 +126,6 @@ proc toValidIdentifier(name: string; star=true): NimNode =
 			result = newIdentNode(name)
 	else:
 		result = toValidIdentifier("oa" & name.replace("__", "_"), star=star)
-		warning name & " is a bad choice of type name", result
 
 proc guessJsonNodeKind(name: string): JsonNodeKind =
 	## map openapi type names to their json node types
@@ -169,8 +208,6 @@ converter toNimNode(ftype: FieldTypeDef): NimNode =
 	of List:
 		assert ftype.member != nil
 		let elements = ftype.member.toNimNode
-		#result = newCommentStmtNode("creating a List of " & $ftype.member.kind)
-		#result.strVal.warning result
 		result = quote do:
 			seq[`elements`]
 	of Complex:
@@ -400,107 +437,154 @@ proc parseTypeDefOrRef(input: JsonNode): NimNode =
 		discard
 	result = ftype.toNimNode
 
-proc makeTypeDef*(ftype: FieldTypeDef; name: string; node: JsonNode = nil): NimNode =
-	## toplevel type builder which emits symbols and associated types,
-	## of Primitive, List, Complex forms
-	let typeName = name.toValidIdentifier
-	var
-		input = node
-		target = input.pluckRefTarget()
-		documentation = input.pluckDescription()
+proc fail(rh: var RightHand; why: string; silent=false) =
+	rh.ok = false
+	rh.comment = rh.name & ": " & why
+	if not silent:
+		rh.ast = newCommentStmtNode(rh.comment)
+		rh.ast.add newCommentStmtNode($rh.js)
+	warning rh.comment, rh.ast
+	warning $rh.js.pretty, rh.ast
 
-	if input != nil and input.kind == JObject and input.len == 0:
-		documentation = newCommentStmtNode(name & " lacks any type info")
-		documentation.strVal.warning
-	if documentation == nil:
-		documentation = newCommentStmtNode(name & " lacks `description`")
+proc bomb(rh: var RightHand; why: string) =
+	rh.fail(why)
+	error "unrecoverable error", rh.ast
 
-	# try to use a ref (pointer) to an equivalent type early, if possible
-	if target != nil:
-		result = newNimNode(nnkTypeDef)
-		result.add typeName
-		result.add newEmptyNode()
-		result.add target
+proc rightHandType(ftype: FieldTypeDef; js: JsonNode; name="?"): RightHand =
+	result = RightHand(ok: false, ftype: ftype, js: js, name: name)
+	var input = js
+	if ftype == nil:
+		result.bomb "no schema provided for unpack"
 		return
+
+	if input == nil:
+		result.bomb "no input for type unpack"
+		return
+
+	if ftype.kind in {List, Complex}:
+		if input.kind != JObject:
+			result.bomb "bad input for " & $input.kind
+			return
+		elif input.len == 0:
+			# this is basically a "type" like {}
+			result.ast = input.defineObjectOrMap()
+			result.ok = true
+			# skip that huge case
+			return
 
 	case ftype.kind:
 	of Primitive:
-		result = newNimNode(nnkTypeDef)
-		result.add typeName
-		result.add newEmptyNode()
-		result.add ftype.toNimNode
+		result.ast = ftype.toNimNode
 	of List:
 		# FIXME: clean this up
 		if "items" notin input:
-			result = newCommentStmtNode(name &
-				" lacks `items` property:\n" & input.pretty)
-			result.strVal.error
+			result.bomb "lacks `items` property"
 			return
 		let member = input["items"].elementTypeDef()
-		result = newNimNode(nnkTypeDef)
-		result.add typeName
-		result.add newEmptyNode()
 		# because it's, like, what, 12 `Sym "[]"` records?
-		result.add quote do:
+		result.ast = quote do:
 			seq[`member`]
 	of Complex:
-		if input == nil or input.kind != JObject:
-			result = newCommentStmtNode(name & "bizarre input:\n" & input.pretty)
-			result.strVal.error
-			return
-		if input.len == 0:
-			# this is basically a "type" like {}
-			result = newNimNode(nnkTypeDef)
-			result.add typeName
-			result.add newEmptyNode()
-			result.add input.defineObjectOrMap()
-			return
 		var major: string
 		# see if it's an untyped value
 		if "type" in input:
 			major = input["type"].getStr
 		else:
+			# we may "fail" in this block, but we won't return
 			if "properties" in input:
-				warning name & " lacks `type` property"
+				result.fail "lacks `type` property", silent=true
 				major = "object"
 			elif "additionalProperties" in input:
-				warning name & " lacks `type` property"
+				result.fail "lacks `type` property", silent=true
 				major = "object"
 			elif "allOf" in input:
-				warning name & " lacks `type` property; allOf poorly implemented!"
+				result.fail "lacks `type` property; allOf poorly implemented", silent=true
 				major = "object"
 				assert input["allOf"].kind == JArray
 				for n in input["allOf"]:
 					input = n
 					break
 			else:
-				result = newCommentStmtNode(name & " lacks `type` property")
-				result.strVal.warning result
+				result.fail "lacks `type` property"
 				return
 		let
 			minor = input.getOrDefault("format").getStr
 			kind = major.guessJsonNodeKind()
+
 		# do we need to define an object type here?
-		if kind in {JObject}:
+		if kind == JObject:
 			# name this object type and add the definition
-			result = newNimNode(nnkTypeDef)
-			result.add typeName
-			result.add newEmptyNode()
-			result.add input.defineObjectOrMap()
-			return
-		# it's not an object; just figure out what it is and def it
-		let rhs = kind.conjugateFieldType(format=minor)
-		# pass the same input through, for comment reasons
-		result = rhs.makeTypeDef(name, input)
+			result.ast = input.defineObjectOrMap()
+
+		# TODO: maybe we have some array code?
+		#elif kind == JArray:
+
+		else:
+			# it's not an object; just figure out what it is and def it
+			let
+				# create a new fieldtype, perhaps permuted by the format
+				rhftype = kind.conjugateFieldType(format=minor)
+				# pass the same input through, for comment reasons
+				rh = rhftype.rightHandType(input, name=name)
+			result.ast = rh.ast
+			if not rh.ok:
+				return
+
 	else:
-		result = newCommentStmtNode(name & " -- bad typedef kind " & $ftype.kind)
-		result.strVal.warning
+		result.fail "bad typedef kind " & $ftype.kind
 		return
+
+	# do anything else you need to do on a valid type held in result,
+	# ie. if we get this far, we aren't merely commenting on bad data
+	result.ok = true
+
+proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): NimNode =
+	## toplevel type builder which emits symbols and associated types,
+	## of Primitive, List, Complex forms
+
+	# no input, no problem
+	if input == nil:
+		result = newCommentStmtNode(name & " lacks any type info")
+		result.strVal.error
+		return
+
+	var
+		target = input.pluckRefTarget()
+		documentation = input.pluckDescription()
+
+	if input.kind == JObject and input.len == 0:
+		documentation = newCommentStmtNode(name & " lacks any type info")
+		documentation.strVal.warning
+	if documentation == nil:
+		documentation = newCommentStmtNode(name & " lacks `description`")
+
+	# if there's a ref target (a symbol), then we'll just use that
+	if target != nil:
+		result = target
+
+	# else unpack the type on the right-hand side
+	else:
+		let rh = rightHandType(ftype, input, name=name)
+		assert rh.ast != nil
+		# good or bad, we always get ast
+		result = rh.ast
+		if not rh.ok:
+			return
+
+	# produce a complete definition
+	let right = result
+	# sadly, still need to figure out how to do docs
+	#result = documentation
+	result = newNimNode(nnkTypeDef)
+	result.add name.toValidIdentifier
+	result.add newEmptyNode()
+	result.add right
 
 proc newPathItem(pr: ParserResult; path: string; input: JsonNode; root: JsonNode): PathItem =
 	## create a PathItem result for a parsed node
-	var
-		op: Operation
+	when false:
+		var
+			op: Operation
 	result = PathItem(ok: pr.ok, parsed: pr, path: path)
 	if root != nil and root.kind == JObject and "basePath" in root:
 		if root["basePath"].kind == JString:
@@ -561,12 +645,25 @@ iterator paths(root: FieldTypeDef; input: JsonNode): PathItem =
 			yield parsed.newPathItem(k, v, input)
 		break
 
-proc `$`(path: PathItem): string =
+proc `$`*(path: PathItem): string =
 	if path.host != "":
 		result = path.host
 	if path.basePath != "/":
 		result.add path.basePath
 	result.add path.path
+
+iterator wrapOneType(ftype: FieldTypeDef; name: string; input: JsonNode): WrappedItem =
+	hint name & " schema type is " & $ftype.kind & "\n " & input.pretty
+	case ftype.kind:
+	of Primitive:
+		yield ftype.newWrappedPrimitive(name, input)
+	of List:
+		error "unable to parse lists"
+		yield ftype.newWrappedList(name, input)
+	of Complex:
+		yield ftype.newWrappedComplex(name, input)
+	else:
+		warning "unable to wrap " & $ftype.kind
 
 proc consume(content: string): ConsumeResult {.compileTime.} =
 	var
@@ -578,10 +675,10 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 
 	while true:
 		try:
-			result.input = content.parseJson()
-			if result.input.kind != JObject:
+			result.js = content.parseJson()
+			if result.js.kind != JObject:
 				error "i was expecting a json object, but i got " &
-					$result.input.kind
+					$result.js.kind
 				break
 		except JsonParsingError as e:
 			error "error parsing the input as json: " & e.msg
@@ -590,8 +687,8 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 			error "json parsing failed, probably due to an overlarge number"
 			break
 
-		if "swagger" in result.input:
-			if result.input["swagger"].getStr != "2.0":
+		if "swagger" in result.js:
+			if result.js["swagger"].getStr != "2.0":
 				error "we only know how to parse openapi-2.0 atm"
 				break
 			result.schema = OpenApi2
@@ -599,7 +696,7 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 			error "no swagger version found in the input"
 			break
 
-		let pr = result.schema.parseSchema(result.input)
+		let pr = result.schema.parseSchema(result.js)
 		if not pr.ok:
 			break
 
@@ -608,10 +705,10 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 		let imports = quote do:
 			import tables
 		let preface = newCommentStmtNode "auto-generated via openapi macro"
-		result.output = newStmtList [preface, imports]
+		result.ast = newStmtList [preface, imports]
 
 		# get some types defined
-		if "definitions" in result.input:
+		if "definitions" in result.js:
 			let
 				definitions = result.schema["definitions"]
 			typedefs = toSeq(definitions.schema.values)
@@ -620,16 +717,34 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 			schema = typedefs[0]
 			var
 				typeSection = newNimNode(nnkTypeSection)
-			for k, v in result.input["definitions"]:
+				meta = newBranch[FieldTypeDef, WrappedItem](anything({}), "meta")
+			for k, v in result.js["definitions"]:
 				parsed = v.parsePair(k, schema)
 				if not parsed.ok:
 					error "parse error on definition for " & k
 					break
-				typeSection.add schema.makeTypeDef(k, node=v)
-			result.output.add typeSection
+				when false:
+					for wrapped in parsed.ftype.wrapOneType(k, v):
+						if wrapped.name in meta:
+							warning "not redefining " & wrapped.name
+							continue
+						case wrapped.kind:
+						of Primitive:
+							meta[k] = newLeaf(parsed.ftype, k, wrapped)
+						#of Complex:
+						#	meta[k] = newBranch[FieldTypeDef, WrappedItem](parsed.ftype, k)
+						else:
+							error "unable to meta " & k & " of type " & $wrapped.kind
+						hint "wrapped " & wrapped.name & " " & wrapped.repr
+				var onedef = schema.makeTypeDef(k, input=v)
+				if onedef != nil:
+					typeSection.add onedef
+				else:
+					warning "got nil onedef"
+			result.ast.add typeSection
 
-		#for path in result.schema.paths(result.input):
-		#	hint "path: " & $path
+		#for path in result.schema.paths(result.js):
+		#	hint $path
 
 		result.ok = true
 		break
@@ -642,7 +757,7 @@ macro openapi*(inputfn: static[string]; outputfn: static[string]=""; body: typed
 	if consumed.ok == false:
 		error "openapi: unable to parse " & `inputfn`
 		return
-	result = consumed.output
+	result = consumed.ast
 
 	if `outputfn` == "":
 		hint "openapi: (provide a filename to save API source)"
