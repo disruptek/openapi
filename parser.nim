@@ -107,6 +107,7 @@ proc parsePair(js: JsonNode; name: FieldName;
 		# was it required?
 		if ftype.required:
 			return result.fail("missing in input")
+		# do nothing since we didn't get the name in the input
 	else:
 		result.child = ftype.parseField(js[name])
 		if result.child.ok:
