@@ -111,10 +111,13 @@ when isMainModule:
 				ms = MySchema()
 				branch = newBranch[MySchema, MyValue](ms, "test1")
 				cb = newBranch[MySchema, MyComplex](ms, "test2")
-				cleaf1 = cb.newLeaf("an integer", mc1)
-				cleaf2 = cb.newLeaf("a string", mc2)
+				cleaf1 = ms.newLeaf("an integer", mc1)
+				cleaf2 = ms.newLeaf("a string", mc2)
 				leaf = ms.newLeaf(sym, mv)
 				leaf2 = ms.newLeaf(sam, 44.MyValue)
+			cb.add cleaf1
+			cb.add cleaf2
+
 		test "isAvailable":
 			check true == branch.isAvailable "goats"
 			check true == branch.isAvailable "pigs"
