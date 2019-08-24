@@ -4,11 +4,11 @@ import strtabs
 import strformat
 
 type
-	WrappedTypeObjKind = enum Leaf, Limb, Branch
-	WrappedTypeObj*[S, V] = object
+	WrappedTypeObjKind* = enum Leaf, Limb, Branch
+	WrappedTypeObj[S, V] = object
 		name*: string
 		schema: S
-		case kind: WrappedTypeObjKind
+		case kind*: WrappedTypeObjKind
 		of Leaf:
 			value: V
 		of Limb:
@@ -30,6 +30,14 @@ proc newBranch*[S, V](schema: S; name: string): WrappedType[S, V] =
 	result = WrappedType[S, V](kind: Branch, name: name, schema: schema)
 	result.keys = newStringTable(modeStyleInsensitive)
 	new(result.values)
+
+iterator values*[S, V](wrapped: WrappedType[S, V]): WrappedType[S, V] =
+	case wrapped.kind:
+	of Branch:
+		for value in wrapped.values.values:
+			yield value
+	else:
+		raise newException(Defect, "called on " & $wrapped.kind)
 
 proc get(branch: WrappedType; key: string): string =
 	if key in branch.keys:
@@ -146,3 +154,5 @@ when isMainModule:
 		test "complex":
 			check cb["a string"].value.comment == "hello"
 			check cb["an integer"].value.integer == 55
+			for n in values(cb):
+				assert n.kind == Leaf
