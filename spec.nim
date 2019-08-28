@@ -70,14 +70,18 @@ proc newFieldTypeDef*(kind: FieldType; kinds: set[JsonNodeKind]={};
 		assert JArray notin kinds, "JArray is an exclusive sub-type"
 		result = FieldTypeDef(kind: Primitive, kinds: kinds, pattern: pattern, required: required)
 	of Complex:
+		assert kinds.len == 1 and JObject in kinds
 		result = FieldTypeDef(kind: Complex, kinds: {JObject}, pattern: pattern, required: required,
 			schema: schema)
 	of Anything:
+		assert kinds.len == 0
 		result = FieldTypeDef(kind: Anything, kinds: {}, pattern: pattern, required: required)
 	of List:
+		assert kinds.len == 1 and JArray in kinds
 		result = FieldTypeDef(kind: List, kinds: {JArray}, pattern: pattern, required: required,
 			member: member)
 	of Either:
+		# TODO: maybe perform an assertion here?
 		result = FieldTypeDef(kind: Either, kinds: {}, pattern: pattern, required: required)
 	#else:
 	#	raise newException(Defect, "unimplemented " & $kind & " field")
@@ -99,6 +103,21 @@ converter toFieldTypeDef*(k: JsonNodeKind): FieldTypeDef =
 	else:
 		result = Primitive.newFieldTypeDef(kinds={k})
 
+converter toJsonNodeKind*(f: FieldTypeDef): JsonNodeKind =
+	case f.kind:
+	of Complex:
+		result = JObject
+	of List:
+		result = JArray
+	of Anything:
+		result = JNull
+	of Either:
+		assert false, "nonsensical conversion of Either type"
+	of Primitive:
+		assert f.kinds.len == 1, "ambiguous types: " & $f.kinds
+		for n in f.kinds:
+			result = n
+
 converter toFieldTypeDef*(s: set[JsonNodeKind]): FieldTypeDef =
 	if JObject in s:
 		assert s == {JObject}, "JObject is an exclusive sub-type"
@@ -112,7 +131,7 @@ converter toFieldTypeDef*(s: set[JsonNodeKind]): FieldTypeDef =
 		result = Primitive.newFieldTypeDef(kinds=s)
 
 converter toFieldTypeDef*(c: Schema): FieldTypeDef =
-	result = Complex.newFieldTypeDef(schema=c)
+	result = Complex.newFieldTypeDef(kinds={JObject}, schema=c)
 
 proc paint(src: FieldTypeDef; dst: FieldTypeDef) =
 	## copy variant values for immutable conversion reasons
