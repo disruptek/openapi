@@ -681,27 +681,38 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
 
 	result.ok = true
 
+template cappableAdd(s: var string; c: char) =
+	if s.len == 0 or s[^1] == '_':
+		s.add c.toUpperAscii()
+	else:
+		s.add c
+
 proc sanitizeIdentifier(name: string; capsOkay=false): string =
-	## convert any string to a valid nim identifier in camelCase
+	## convert any string to a valid nim identifier in camel_Case
 	if name.validNimIdentifier:
 		return name
 	if name.len == 0:
 		raise newException(ValueError, "empty identifier")
 	for c in name:
-		if c == '_' and result.len == 0:
+		if result.len == 0:
+			if c in IdentStartChars:
+				result.cappableAdd c
+				continue
+		elif c in IdentChars:
+			result.cappableAdd c
 			continue
-		if c in IdentChars:
-			result.add c
-		elif result.len != 0 and result[^1] != '_':
-			result.add '_'
-	if not capsOkay and result[0].isUpperAscii:
-		result[0] = result[0].toLowerAscii
+		# help differentiate words case-insensitively
+		result.add '_'
+	while "__" in result:
+		result = result.replace("__", "_")
 	if result.len > 1:
 		result.removeSuffix {'_'}
 		result.removePrefix {'_'}
 	if result[0] notin IdentStartChars:
 		raise newException(ValueError,
 			"identifiers cannot start with `" & result[0] & "`")
+	if not capsOkay and result[0].isUpperAscii:
+		result[0] = result[0].toLowerAscii
 	assert result.validNimIdentifier, "bad identifier: " & result
 
 proc saneName(param: Parameter): string =
@@ -922,7 +933,10 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 		# TODO: clean this up into a manually-constructed ladder to merge asserts
 		if useDefault:
 			# set default value for input
-			defNode = param.default.toNewJsonNimNode
+			try:
+				defNode = param.default.toNewJsonNimNode
+			except ValueError as e:
+				error e.msg & ":\n" & param.default.pretty
 			opBody.add quote do:
 				if `saneIdent` == nil:
 					inputs.add `insane`, `defNode`
