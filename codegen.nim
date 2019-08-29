@@ -265,6 +265,9 @@ proc pluckRefJson(root: JsonNode; input: JsonNode): JsonNode =
 		paths = paths[1..^1]
 	result = root
 	for p in paths:
+		if p notin result:
+			warning "schema reference `" & target.get() & "` not found"
+			return nil
 		result = result[p]
 
 proc pluckRefNode(input: JsonNode): NimNode =
@@ -773,6 +776,9 @@ proc newOperation(root: JsonNode; meth: HttpOpName; path: string; input: JsonNod
 			let sane = result.saneName
 			warning "invented operation name `" & sane & "`"
 			result.operationId = sane
+	let
+		opName = result.saneName
+		opIdent = newExportedIdentNode(opName)
 	if "responses" in js:
 		for status, resp in js["responses"].pairs:
 			response = root.newResponse(status, resp)
@@ -797,14 +803,11 @@ proc newOperation(root: JsonNode; meth: HttpOpName; path: string; input: JsonNod
 				for name in saneNames:
 					if not sane.eqIdent(name):
 						continue
-					let msg = "parameter `" & name & "` and `" & parameter.name &
-						"` yield the same Nim identifier"
+					let msg = opName & ": parameter `" & name & "` and `" &
+						parameter.name & "` yield the same Nim identifier"
 					error msg
 					return
 				saneNames.add sane
-	let
-		opName = result.saneName
-		opIdent = newExportedIdentNode(opName)
 	
 	var
 		opJsAssertions = newStmtList()
