@@ -727,6 +727,7 @@ proc saneName(op: Operation): string =
 	if op.operationId != "":
 		attempt.add op.operationId
 		attempt.add $op.meth & "_" & op.operationId
+	# TODO: turn path /some/{var_name}/foo_bar into some_varName_fooBar?
 	attempt.add $op.meth & "_" & op.path
 	for name in attempt:
 		try:
