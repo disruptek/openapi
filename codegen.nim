@@ -79,6 +79,17 @@ type
 		of Complex:
 			complex: WrappedField
 
+proc validNimIdentifier(s: string): bool =
+	if s.len > 0 and s[0] in IdentStartChars:
+		if s.len > 1 and '_' in [s[0], s[^1]]:
+			return false
+		for i in 1..s.len-1:
+			if s[i] notin IdentChars:
+				return false
+			if s[i] == '_' and s[i-1] == '_':
+				return false
+		return true
+
 proc newWrappedPrimitive(ftype: FieldTypeDef, name: string; js: JsonNode): WrappedItem =
 	## a wrapped item that points to a primitive
 	result = WrappedItem(kind: Primitive, name: name, primitive: js)
@@ -102,7 +113,7 @@ proc parseTypeDefOrRef(input: JsonNode): NimNode
 
 proc newExportedIdentNode(name: string): NimNode =
 	## newIdentNode with an export annotation
-	assert name.validIdentifier == true
+	assert name.validNimIdentifier == true
 	result = newNimNode(nnkPostfix)
 	result.add newIdentNode("*")
 	result.add newIdentNode(name)
@@ -114,7 +125,7 @@ proc isValidIdentifier(name: string): bool =
 	elif "__" in name:
 		result = false
 	else:
-		result = name.validIdentifier
+		result = name.validNimIdentifier
 
 proc toValidIdentifier(name: string; star=true): NimNode =
 	## permute identifiers until they are valid
@@ -672,7 +683,7 @@ proc newResponse(root: JsonNode; status: string; input: JsonNode): Response =
 
 proc sanitizeIdentifier(name: string; capsOkay=false): string =
 	## convert any string to a valid nim identifier in camelCase
-	if name.validIdentifier:
+	if name.validNimIdentifier:
 		return name
 	if name.len == 0:
 		raise newException(ValueError, "empty identifier")
@@ -691,7 +702,7 @@ proc sanitizeIdentifier(name: string; capsOkay=false): string =
 	if result[0] notin IdentStartChars:
 		raise newException(ValueError,
 			"identifiers cannot start with `" & result[0] & "`")
-	assert result.validIdentifier, "bad identifier: " & result
+	assert result.validNimIdentifier, "bad identifier: " & result
 
 proc saneName(param: Parameter): string =
 	try:
