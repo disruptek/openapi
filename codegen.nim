@@ -5,6 +5,7 @@ import json
 import strutils
 import options
 import hashes
+import strtabs
 
 import spec
 import parser
@@ -12,8 +13,6 @@ import paths
 import typewrap
 
 from schema2 import OpenApi2
-
-const WarnIdentityClash = true
 
 type
 	ConsumeResult* = object of RootObj
@@ -46,7 +45,7 @@ type
 		source*: JsonNode
 
 	Parameters = object
-		sane: seq[string]
+		sane: StringTableRef
 		tab: Table[Hash, Parameter]
 
 	Response = object of ConsumeResult
@@ -728,16 +727,8 @@ proc saneName(op: Operation): string =
 
 proc hash(p: Parameter): Hash =
 	## parameter cardinality is a function of name and location
-	var name = p.saneName.toLowerAscii
-	result = p.location.hash !& name.hash
+	result = p.location.hash !& p.name.hash
 	result = !$result
-
-proc add(parameters: var Parameters; p: Parameter) =
-	## simpler add explicitly using hash
-	var name = p.saneName.toLowerAscii
-	if name notin parameters.sane:
-		parameters.sane.add name
-	parameters.tab.add p.hash, p
 
 proc contains(parameters: var Parameters; p: Parameter): bool =
 	var name = p.saneName.toLowerAscii
@@ -747,10 +738,53 @@ iterator items(parameters: Parameters): Parameter =
 	for p in parameters.tab.values:
 		yield p
 
+iterator nameClashes(parameters: Parameters; p: Parameter): Parameter =
+	## yield clashes that don't produce parameter "overrides" (identity)
+	let name = p.saneName
+	if name in parameters.sane:
+		for existing in parameters:
+			# identical parameter names can be ignored
+			if existing.name == p.name:
+				if existing.location == p.location:
+					continue
+			# yield only identifier collisions
+			if name.eqIdent(existing.saneName):
+				yield existing
+
+proc add(parameters: var Parameters; p: Parameter): Option[string] =
+	## simpler add explicitly using hash
+	let
+		location = $p.location
+		name = p.saneName
+
+	for existing in parameters.nameClashes(p):
+		# for an add, we don't care if the location doesn't match
+		if existing.location != p.location:
+			continue
+		# the names have to match, not just their identifier versions
+		if existing.name == p.name:
+			return some(existing.name)
+		# otherwise, we should probably figure out alternative logic
+		error "identifiers match but names don't: `" & existing.name &
+			"` versus `" & p.name & "`"
+	parameters.sane[name] = location
+	parameters.tab.add p.hash, p
+
+proc safeAdd(params: var Parameters; p: Parameter; prefix="") =
+	let clashed = params.add p
+	if clashed.isNone:
+		return
+	var msg = "parameter `" & clashed.get() & "` in " & $p.location &
+		" and `" & p.name & "` yield the same Nim identifier"
+	if prefix != "":
+		msg = prefix & ": " & msg
+	error msg
+
 proc initParameters(parameters: var Parameters) =
+	parameters.sane = newStringTable(modeStyleInsensitive)
 	parameters.tab = initTable[Hash, Parameter]()
 
-proc readParameters(root: JsonNode; js: JsonNode): Parameters =
+proc readParameters(root: JsonNode; js: JsonNode; prefix=""): Parameters =
 	## parse parameters out of an arbitrary JsonNode
 	result.initParameters()
 	for param in js:
@@ -758,7 +792,7 @@ proc readParameters(root: JsonNode; js: JsonNode): Parameters =
 		if not parameter.ok:
 			error "bad parameter:\n" & param.pretty
 			continue
-		result.add parameter
+		result.safeAdd parameter, prefix
 
 proc newResponse(root: JsonNode; status: string; input: JsonNode): Response =
 	var js = root.pluckRefJson(input)
@@ -830,26 +864,11 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 	result.parameters.initParameters()
 	# inherited parameters from the PathItem
 	for parameter in path.parameters:
-		result.parameters.add parameter
+		result.parameters.safeAdd parameter, opName
 	# parameters for this particular http method
 	if "parameters" in js:
 		for parameter in root.readParameters(js["parameters"]):
-			result.parameters.add parameter
-
-	when WarnIdentityClash:
-		var
-			saneNames: seq[string] = @[]
-			sane: string
-		for parameter in result.parameters:
-			sane = parameter.saneName
-			for name in saneNames:
-				if not sane.eqIdent(name):
-					continue
-				let msg = opName & ": parameter `" & name & "` and `" &
-					parameter.name & "` yield the same Nim identifier"
-				error msg
-				return
-			saneNames.add sane
+			result.parameters.safeAdd parameter, opName
 	
 	var
 		opJsAssertions = newStmtList()
@@ -888,6 +907,10 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 			defNode: NimNode
 			errmsg: string
 		errmsg = "expected " & $jsKind & " for `" & sane & "` but received "
+		for clash in result.parameters.nameClashes(param):
+			error "identifier clash in proc arguments: `" & clash.name &
+				"` versus `" & param.name & "`"
+
 		if param.default != nil:
 			if jsKind == param.default.kind:
 				useDefault = true
@@ -939,7 +962,7 @@ proc newPathItem(root: JsonNode; path: string; input: JsonNode): PathItem =
 
 	# record default parameters for the path
 	if "parameters" in input:
-		result.parameters = root.readParameters(input["parameters"])
+		result.parameters = root.readParameters(input["parameters"], path)
 
 	# look for operation names in the input
 	for opName in HttpOpName:
