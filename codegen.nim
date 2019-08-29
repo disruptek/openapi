@@ -58,6 +58,8 @@ type
 		operationId*: string
 		parameters*: Parameters
 		responses*: seq[Response]
+		# TODO: support this natively
+		deprecated*: bool
 
 	TypeDefResult* = object of ConsumeResult
 		name: string
