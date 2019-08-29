@@ -741,10 +741,6 @@ proc hash(p: Parameter): Hash =
 	result = p.location.hash !& p.name.hash
 	result = !$result
 
-proc contains(parameters: var Parameters; p: Parameter): bool =
-	var name = p.saneName.toLowerAscii
-	result = name in parameters.sane
-
 iterator items(parameters: Parameters): Parameter =
 	for p in parameters.tab.values:
 		yield p
@@ -822,7 +818,10 @@ proc toJsonIdentDefs(param: Parameter): NimNode =
 		result = newIdentDefs(name, newIdentNode("JsonNode"), newNilLit())
 
 proc toNewJsonNimNode(js: JsonNode): NimNode =
+	## take a JsonNode value and produce Nim that instantiates it
 	case js.kind:
+	of JNull:
+		result = quote do: newJNull()
 	of JInt:
 		let i = js.getInt
 		result = quote do: newJInt(`i`)
@@ -835,13 +834,37 @@ proc toNewJsonNimNode(js: JsonNode): NimNode =
 	of JBool:
 		let b = newIdentNode($js.getBool)
 		result = quote do: newJBool(`b`)
+	of JArray:
+		var
+			a = newNimNode(nnkBracket)
+			t: JsonNodeKind
+		for i, j in js.getElems:
+			if i == 0:
+				t = j.kind
+			elif t != j.kind:
+				warning "disparate JArray element kinds are discouraged"
+			else:
+				a.add j.toNewJsonNimNode
+		var
+			c = newStmtList()
+			i = newIdentNode("jarray")
+		c.add quote do:
+			var `i` = newJarray()
+		for j in a:
+			c.add quote do:
+				`i`.add `j`
+		c.add quote do:
+			`i`
+		result = newBlockStmt(c)
 	else:
 		raise newException(ValueError, "unsupported input: " & $js.kind)
 
 proc shortRepr(js: JsonNode): string =
+	## render a JInt(3) as "JInt(3)"; will puke on arrays/objects/null
 	result = $js.kind & "(" & $js & ")"
 
 proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
+	## create a new operation for a given http method on a given path
 	var
 		response: Response
 	var js = root.pluckRefJson(input)
@@ -1030,6 +1053,7 @@ iterator paths(root: JsonNode; ftype: FieldTypeDef): PathItem =
 		break
 
 proc `$`*(path: PathItem): string =
+	## render a path item for error message purposes
 	if path.host != "":
 		result = path.host
 	if path.basePath != "/":
@@ -1037,6 +1061,7 @@ proc `$`*(path: PathItem): string =
 	result.add path.path
 
 proc `$`*(op: Operation): string =
+	## render an operation for error message purposes
 	result = op.saneName
 
 iterator wrapOneType(ftype: FieldTypeDef; name: string; input: JsonNode): WrappedItem {.deprecated.} =
