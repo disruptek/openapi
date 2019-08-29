@@ -711,8 +711,13 @@ proc sanitizeIdentifier(name: string; capsOkay=false): string =
 	if result[0] notin IdentStartChars:
 		raise newException(ValueError,
 			"identifiers cannot start with `" & result[0] & "`")
+	# if we need to lowercase the first letter, we'll lowercase
+	# until we hit a word boundary (_, digit, or lowercase char)
 	if not capsOkay and result[0].isUpperAscii:
-		result[0] = result[0].toLowerAscii
+		for i in result.low..result.high:
+			if result[i] in ['_', result[i].toLowerAscii]:
+				break
+			result[i] = result[i].toLowerAscii
 	assert result.validNimIdentifier, "bad identifier: " & result
 
 proc saneName(param: Parameter): string =
