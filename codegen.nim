@@ -781,12 +781,27 @@ proc newOperation(root: JsonNode; meth: HttpOpName; path: string; input: JsonNod
 			else:
 				warning "bad response:\n" & resp.pretty
 	if "parameters" in js:
-		for param in js["parameters"].elems:
+		const WarnIdentityClash = true
+		when WarnIdentityClash:
+			var
+				saneNames: seq[string] = @[]
+				sane: string
+		for param in js["parameters"]:
 			parameter = root.newParameter(param)
-			if parameter.ok:
-				result.parameters.add parameter
-			else:
+			if not parameter.ok:
 				error "bad parameter:\n" & param.pretty
+				continue
+			result.parameters.add parameter
+			when WarnIdentityClash:
+				sane = parameter.saneName
+				for name in saneNames:
+					if not sane.eqIdent(name):
+						continue
+					let msg = "parameter `" & name & "` and `" & parameter.name &
+						"` yield the same Nim identifier"
+					error msg
+					return
+				saneNames.add sane
 	let
 		opName = result.saneName
 		opIdent = newExportedIdentNode(opName)
