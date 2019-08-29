@@ -942,8 +942,8 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 			errmsg: string
 		errmsg = "expected " & $jsKind & " for `" & sane & "` but received "
 		for clash in result.parameters.nameClashes(param):
-			error "identifier clash in proc arguments: `" & clash.name &
-				"` versus `" & param.name & "`"
+			error "identifier clash in proc arguments: " & $clash.location & "-`" &
+			clash.name & "` versus " & $param.location & "-`" & param.name & "`"
 
 		if param.default != nil:
 			if jsKind == param.default.kind:
