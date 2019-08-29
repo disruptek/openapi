@@ -4,6 +4,7 @@ import tables
 import json
 import strutils
 import options
+import hashes
 
 import spec
 import parser
@@ -11,6 +12,8 @@ import paths
 import typewrap
 
 from schema2 import OpenApi2
+
+const WarnIdentityClash = true
 
 type
 	ConsumeResult* = object of RootObj
@@ -25,7 +28,7 @@ type
 		basePath*: string
 		host*: string
 		operations*: Table[string, Operation]
-		parameters*: seq[Parameter]
+		parameters*: Parameters
 
 	ParameterIn = enum
 		InQuery = "query"
@@ -42,6 +45,10 @@ type
 		default*: JsonNode
 		source*: JsonNode
 
+	Parameters = object
+		sane: seq[string]
+		tab: Table[Hash, Parameter]
+
 	Response = object of ConsumeResult
 		status: string
 		description: string
@@ -50,7 +57,7 @@ type
 		meth*: HttpOpName
 		path*: string
 		operationId*: string
-		parameters*: seq[Parameter]
+		parameters*: Parameters
 		responses*: seq[Response]
 
 	TypeDefResult* = object of ConsumeResult
@@ -675,15 +682,6 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
 
 	result.ok = true
 
-proc newResponse(root: JsonNode; status: string; input: JsonNode): Response =
-	var js = root.pluckRefJson(input)
-	if js == nil:
-		js = input
-	result = Response(ok: false, status: status, js: js)
-	result.description = js.getOrDefault("description").getStr
-	# TODO: save the schema
-	result.ok = true
-
 proc sanitizeIdentifier(name: string; capsOkay=false): string =
 	## convert any string to a valid nim identifier in camelCase
 	if name.validNimIdentifier:
@@ -728,6 +726,49 @@ proc saneName(op: Operation): string =
 	raise newException(ValueError,
 		"unable to compose valid identifier; attempted these: " & attempt.repr)
 
+proc hash(p: Parameter): Hash =
+	## parameter cardinality is a function of name and location
+	var name = p.saneName.toLowerAscii
+	result = p.location.hash !& name.hash
+	result = !$result
+
+proc add(parameters: var Parameters; p: Parameter) =
+	## simpler add explicitly using hash
+	var name = p.saneName.toLowerAscii
+	if name notin parameters.sane:
+		parameters.sane.add name
+	parameters.tab.add p.hash, p
+
+proc contains(parameters: var Parameters; p: Parameter): bool =
+	var name = p.saneName.toLowerAscii
+	result = name in parameters.sane
+
+iterator items(parameters: Parameters): Parameter =
+	for p in parameters.tab.values:
+		yield p
+
+proc initParameters(parameters: var Parameters) =
+	parameters.tab = initTable[Hash, Parameter]()
+
+proc readParameters(root: JsonNode; js: JsonNode): Parameters =
+	## parse parameters out of an arbitrary JsonNode
+	result.initParameters()
+	for param in js:
+		var parameter = root.newParameter(param)
+		if not parameter.ok:
+			error "bad parameter:\n" & param.pretty
+			continue
+		result.add parameter
+
+proc newResponse(root: JsonNode; status: string; input: JsonNode): Response =
+	var js = root.pluckRefJson(input)
+	if js == nil:
+		js = input
+	result = Response(ok: false, status: status, js: js)
+	result.description = js.getOrDefault("description").getStr
+	# TODO: save the schema
+	result.ok = true
+
 proc toJsonIdentDefs(param: Parameter): NimNode =
 	let name = newIdentNode(param.saneName)
 	if param.required:
@@ -755,23 +796,22 @@ proc toNewJsonNimNode(js: JsonNode): NimNode =
 proc shortRepr(js: JsonNode): string =
 	result = $js.kind & "(" & $js & ")"
 
-proc newOperation(root: JsonNode; meth: HttpOpName; path: string; input: JsonNode): Operation =
+proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
 	var
 		response: Response
-		parameter: Parameter
 	var js = root.pluckRefJson(input)
 	if js == nil:
 		js = input
-	result = Operation(ok: false, meth: meth, path: path, js: js)
+	result = Operation(ok: false, meth: meth, path: path.path, js: js)
 	result.operationId = js.getOrDefault("operationId").getStr
 	if result.operationId == "":
 		var msg = "operationId not defined for " & toUpperAscii($meth)
-		if path == "":
+		if path.path == "":
 			msg = "empty path and " & msg
 			error msg
 			return
 		else:
-			msg = msg & " on `" & path & "`"
+			msg = msg & " on `" & path.path & "`"
 			warning msg
 			let sane = result.saneName
 			warning "invented operation name `" & sane & "`"
@@ -786,35 +826,37 @@ proc newOperation(root: JsonNode; meth: HttpOpName; path: string; input: JsonNod
 				result.responses.add response
 			else:
 				warning "bad response:\n" & resp.pretty
+	
+	result.parameters.initParameters()
+	# inherited parameters from the PathItem
+	for parameter in path.parameters:
+		result.parameters.add parameter
+	# parameters for this particular http method
 	if "parameters" in js:
-		const WarnIdentityClash = true
-		when WarnIdentityClash:
-			var
-				saneNames: seq[string] = @[]
-				sane: string
-		for param in js["parameters"]:
-			parameter = root.newParameter(param)
-			if not parameter.ok:
-				error "bad parameter:\n" & param.pretty
-				continue
+		for parameter in root.readParameters(js["parameters"]):
 			result.parameters.add parameter
-			when WarnIdentityClash:
-				sane = parameter.saneName
-				for name in saneNames:
-					if not sane.eqIdent(name):
-						continue
-					let msg = opName & ": parameter `" & name & "` and `" &
-						parameter.name & "` yield the same Nim identifier"
-					error msg
-					return
-				saneNames.add sane
+
+	when WarnIdentityClash:
+		var
+			saneNames: seq[string] = @[]
+			sane: string
+		for parameter in result.parameters:
+			sane = parameter.saneName
+			for name in saneNames:
+				if not sane.eqIdent(name):
+					continue
+				let msg = opName & ": parameter `" & name & "` and `" &
+					parameter.name & "` yield the same Nim identifier"
+				error msg
+				return
+			saneNames.add sane
 	
 	var
 		opJsAssertions = newStmtList()
 		opBody = newStmtList()
 		opJsParams: seq[NimNode] = @[newEmptyNode()]
 	
-	# add required params first, then optionals
+	# add required params first,
 	for param in result.parameters:
 		if param.required:
 			opJsParams.add param.toJsonIdentDefs
@@ -824,6 +866,7 @@ proc newOperation(root: JsonNode; meth: HttpOpName; path: string; input: JsonNod
 			opJsAssertions.add quote do:
 				assert `saneIdent` != nil, `errmsg`
 
+	# then add optional params
 	for param in result.parameters:
 		if not param.required:
 			opJsParams.add param.toJsonIdentDefs
@@ -893,11 +936,16 @@ proc newPathItem(root: JsonNode; path: string; input: JsonNode): PathItem =
 	if "$ref" in input:
 		error "path item $ref is unimplemented:\n" & input.pretty
 		return
+
+	# record default parameters for the path
+	if "parameters" in input:
+		result.parameters = root.readParameters(input["parameters"])
+
 	# look for operation names in the input
 	for opName in HttpOpName:
 		if $opName notin input:
 			continue
-		op = root.newOperation(opName, path, input[$opName])
+		op = result.newOperation(opName, root, input[$opName])
 		if not op.ok:
 			warning "unable to parse " & $opName & " on " & path
 			continue
