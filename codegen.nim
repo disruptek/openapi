@@ -88,6 +88,7 @@ type
 			complex: WrappedField
 
 proc validNimIdentifier(s: string): bool =
+	## true for strings that are valid identifier names
 	if s.len > 0 and s[0] in IdentStartChars:
 		if s.len > 1 and '_' in [s[0], s[^1]]:
 			return false
@@ -247,6 +248,7 @@ proc pluckString(input: JsonNode; key: string): Option[string] =
 	result = some(input[key].getStr)
 
 proc pluckDescription(input: JsonNode): NimNode =
+	## return a comment node for the given json
 	let desc = input.pluckString("description")
 	if desc.isSome:
 		return newCommentStmtNode(desc.get())
@@ -339,6 +341,7 @@ proc defineMap(input: JsonNode): NimNode =
 			target = ftype.toNimNode
 		else:
 			# it's a List, Complex, or worse
+			# TODO: verify that this is correct!
 			target = newIdentNode("string")
 
 	return quote do:
@@ -478,6 +481,7 @@ proc parseTypeDefOrRef(input: JsonNode): NimNode =
 		return ftype.toNimNode
 
 proc fail(rh: var TypeDefResult; why: string; silent=false) =
+	## prepare the result of a failed parse
 	rh.ok = false
 	rh.comment = rh.name & ": " & why
 	if not silent:
@@ -494,13 +498,16 @@ proc whine(rh: var TypeDefResult; why: string) {.deprecated.} =
 	rh.ok = was or rh.ok
 
 proc bomb(rh: var TypeDefResult; why: string) =
+	## prepare the result of a fatal parse failure
 	rh.fail(why)
 	error "unrecoverable error", rh.ast
 
 proc whine(input: JsonNode; why: string) =
+	## merely complain about an irregular input
 	warning why & ":\n" & input.pretty
 
 proc guessType(js: JsonNode; root: JsonNode): GuessTypeResult =
+	## guess the JsonNodeKind of a node/schema, perhaps dereferencing
 	var
 		major: string
 		input = root.pluckRefJson(js)
@@ -544,6 +551,7 @@ proc guessType(js: JsonNode; root: JsonNode): GuessTypeResult =
 		result = (ok: true, major: input.kind, minor: "")
 
 proc rightHandType(ftype: FieldTypeDef; js: JsonNode; name="?"): TypeDefResult =
+	## produce the right-hand side of a typedef given a json schema
 	result = TypeDefResult(ok: false, ftype: ftype, js: js, name: name)
 	var input = js
 	if ftype == nil:
@@ -652,12 +660,14 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Typ
 	result.ok = true
 
 proc jsonKind(param: Parameter; root: JsonNode): JsonNodeKind =
+	## determine the type of a parameter
 	let kind = param.source.guessType(root)
-	if kind.ok:
-		return kind.major
-	raise newException(ValueError, "unable to guess type:\n" & param.js.pretty)
+	if not kind.ok:
+		raise newException(ValueError, "unable to guess type:\n" & param.js.pretty)
+	result = kind.major
 
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
+	## instantiate a new parameter from a JsonNode schema
 	assert input != nil and input.kind == JObject, "bizarre input: " &
 		input.pretty
 	var js = root.pluckRefJson(input)
@@ -684,6 +694,7 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
 	result.ok = true
 
 template cappableAdd(s: var string; c: char) =
+	## add a char to a string, perhaps capitalizing it
 	if s.len == 0 or s[^1] == '_':
 		s.add c.toUpperAscii()
 	else:
@@ -723,6 +734,7 @@ proc sanitizeIdentifier(name: string; capsOkay=false): string =
 	assert result.validNimIdentifier, "bad identifier: " & result
 
 proc saneName(param: Parameter): string =
+	## produce a safe identifier for the given parameter
 	try:
 		return sanitizeIdentifier(param.name, capsOkay=true)
 	except ValueError:
@@ -730,6 +742,7 @@ proc saneName(param: Parameter): string =
 			"unable to compose valid identifier for parameter `" & param.name & "`")
 
 proc saneName(op: Operation): string =
+	## produce a safe identifier for the given operation
 	var attempt: seq[string]
 	if op.operationId != "":
 		attempt.add op.operationId
@@ -750,6 +763,7 @@ proc hash(p: Parameter): Hash =
 	result = !$result
 
 iterator items(parameters: Parameters): Parameter =
+	## helper for iterating over parameters
 	for p in parameters.tab.values:
 		yield p
 
@@ -786,6 +800,7 @@ proc add(parameters: var Parameters; p: Parameter): Option[string] =
 	parameters.tab.add p.hash, p
 
 proc safeAdd(params: var Parameters; p: Parameter; prefix="") =
+	## attempt to add a parameter to the container, erroring if it clashes
 	let clashed = params.add p
 	if clashed.isNone:
 		return
@@ -796,6 +811,7 @@ proc safeAdd(params: var Parameters; p: Parameter; prefix="") =
 	error msg
 
 proc initParameters(parameters: var Parameters) =
+	## prepare a parameter container to accept parameters
 	parameters.sane = newStringTable(modeStyleInsensitive)
 	parameters.tab = initTable[Hash, Parameter]()
 
@@ -810,6 +826,7 @@ proc readParameters(root: JsonNode; js: JsonNode; prefix=""): Parameters =
 		result.safeAdd parameter, prefix
 
 proc newResponse(root: JsonNode; status: string; input: JsonNode): Response =
+	## create a new Response
 	var js = root.pluckRefJson(input)
 	if js == nil:
 		js = input
@@ -819,6 +836,7 @@ proc newResponse(root: JsonNode; status: string; input: JsonNode): Response =
 	result.ok = true
 
 proc toJsonIdentDefs(param: Parameter): NimNode =
+	## create the right-hand side of a JsonNode typedef for the given parameter
 	let name = newIdentNode(param.saneName)
 	if param.required:
 		result = newIdentDefs(name, newIdentNode("JsonNode"))
@@ -1021,6 +1039,7 @@ proc newPathItem(root: JsonNode; path: string; input: JsonNode): PathItem =
 	result.ok = true
 
 iterator paths(root: JsonNode; ftype: FieldTypeDef): PathItem =
+	## yield path items found in the given node
 	var
 		schema: Schema
 		pschema: Schema = nil
@@ -1046,6 +1065,7 @@ iterator paths(root: JsonNode; ftype: FieldTypeDef): PathItem =
 		# find a good schema definition for ie. /{name}
 		for k, v in pschema.pairs:
 			if not k.startsWith("/"):
+				warning "skipped invalid path: `" & k & "`"
 				continue
 			schema = v.schema
 			break
@@ -1085,6 +1105,7 @@ iterator wrapOneType(ftype: FieldTypeDef; name: string; input: JsonNode): Wrappe
 		warning "unable to wrap " & $ftype.kind
 
 proc consume(content: string): ConsumeResult {.compileTime.} =
+	## parse a string which might hold an openapi definition
 	when false:
 		var
 			parsed: ParserResult
@@ -1174,6 +1195,8 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 		break
 
 macro openapi*(inputfn: static[string]; outputfn: static[string]=""; body: typed): untyped =
+	## parse input json filename and output nim target library
+	# TODO: this should get renamed to openApiClient to make room for openApiServer
 	let content = staticRead(`inputfn`)
 	var consumed = content.consume()
 	if consumed.ok == false:
