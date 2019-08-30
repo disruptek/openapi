@@ -762,6 +762,10 @@ proc hash(p: Parameter): Hash =
 	result = p.location.hash !& p.name.hash
 	result = !$result
 
+proc len(parameters: Parameters): int =
+	## the number of items in the container
+	result = parameters.tab.len
+
 iterator items(parameters: Parameters): Parameter =
 	## helper for iterating over parameters
 	for p in parameters.tab.values:
@@ -891,6 +895,80 @@ proc shortRepr(js: JsonNode): string =
 	## render a JInt(3) as "JInt(3)"; will puke on arrays/objects/null
 	result = $js.kind & "(" & $js & ")"
 
+proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): NimNode =
+	let
+		opIdent = newExportedIdentNode(name)
+		validIdent = newIdentNode("valid")
+	var
+		opBody = newStmtList()
+		opJsParams: seq[NimNode] = @[newIdentNode("JsonNode")]
+	
+	# add required params first,
+	for param in op.parameters:
+		if param.required:
+			opJsParams.add param.toJsonIdentDefs
+			var
+				saneIdent = newIdentNode(param.saneName)
+
+	# then add optional params
+	for param in op.parameters:
+		if not param.required:
+			opJsParams.add param.toJsonIdentDefs
+
+	let inputsIdent = newIdentNode("result")
+	if op.parameters.len > 0:
+		opBody.add quote do:
+			var `validIdent`: JsonNode
+	opBody.add quote do:
+		`inputsIdent` = newJObject()
+
+	# assert proper parameter types and/or set defaults
+	for param in op.parameters:
+		var
+			insane = param.name
+			sane = param.saneName
+			saneIdent = newIdentNode(sane)
+			jsKind = param.jsonKind(root)
+			kindIdent = newIdentNode($jsKind)
+			reqIdent = newIdentNode($param.required)
+			useDefault = false
+			defNode: NimNode
+			errmsg: string
+		errmsg = "expected " & $jsKind & " for `" & sane & "` but received "
+		for clash in op.parameters.nameClashes(param):
+			error "identifier clash in proc arguments: " & $clash.location & "-`" &
+			clash.name & "` versus " & $param.location & "-`" & param.name & "`"
+
+		if param.default != nil:
+			if jsKind == param.default.kind:
+				useDefault = true
+			else:
+				# provide a warning if the default type doesn't match the input
+				warning "`" & sane & "` parameter in `" & $op.operationId &
+					"` is " & $jsKind & " but the default is " &
+					param.default.shortRepr & "; omitting code to supply the default"
+		# TODO: clean this up into a manually-constructed ladder to merge asserts
+		if useDefault:
+			# set default value for input
+			try:
+				defNode = param.default.toNewJsonNimNode
+			except ValueError as e:
+				error e.msg & ":\n" & param.default.pretty
+		else:
+			defNode = newNilLit()
+
+		opBody.add quote do:
+			`validIdent` = validateParameter(`saneIdent`, `kindIdent`,
+				required=`reqIdent`, default=`defNode`)
+		if param.required:
+			opBody.add quote do:
+				`inputsIdent`.add(`insane`, `validIdent`)
+		else:
+			opBody.add quote do:
+				if `validIdent` != nil:
+					`inputsIdent`.add(`insane`, `validIdent`)
+	result = newProc(opIdent, opJsParams, opBody)
+
 proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
 	## create a new operation for a given http method on a given path
 	var
@@ -912,9 +990,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 			let sane = result.saneName
 			warning "invented operation name `" & sane & "`"
 			result.operationId = sane
-	let
-		opName = result.saneName
-		opIdent = newExportedIdentNode(opName)
+	let sane = result.saneName
 	if "responses" in js:
 		for status, resp in js["responses"].pairs:
 			response = root.newResponse(status, resp)
@@ -926,85 +1002,14 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 	result.parameters.initParameters()
 	# inherited parameters from the PathItem
 	for parameter in path.parameters:
-		result.parameters.safeAdd parameter, opName
+		result.parameters.safeAdd parameter, sane
 	# parameters for this particular http method
 	if "parameters" in js:
 		for parameter in root.readParameters(js["parameters"]):
-			result.parameters.safeAdd parameter, opName
-	
-	var
-		opJsAssertions = newStmtList()
-		opBody = newStmtList()
-		opJsParams: seq[NimNode] = @[newIdentNode("JsonNode")]
-	
-	# add required params first,
-	for param in result.parameters:
-		if param.required:
-			opJsParams.add param.toJsonIdentDefs
-			var
-				errmsg = "`" & param.saneName & "` is a required parameter"
-				saneIdent = newIdentNode(param.saneName)
-			opJsAssertions.add quote do:
-				assert `saneIdent` != nil, `errmsg`
-
-	# then add optional params
-	for param in result.parameters:
-		if not param.required:
-			opJsParams.add param.toJsonIdentDefs
-
-	opBody.add opJsAssertions
-	let inputsIdent = newIdentNode("result")
-	opBody.add quote do:
-		`inputsIdent` = newJObject()
-
-	# assert proper parameter types and/or set defaults
-	for param in result.parameters:
-		var
-			insane = param.name
-			sane = param.saneName
-			saneIdent = newIdentNode(param.saneName)
-			jsKind = param.jsonKind(root)
-			kindIdent = newIdentNode($jsKind)
-			useDefault = false
-			defNode: NimNode
-			errmsg: string
-		errmsg = "expected " & $jsKind & " for `" & sane & "` but received "
-		for clash in result.parameters.nameClashes(param):
-			error "identifier clash in proc arguments: " & $clash.location & "-`" &
-			clash.name & "` versus " & $param.location & "-`" & param.name & "`"
-
-		if param.default != nil:
-			if jsKind == param.default.kind:
-				useDefault = true
-			else:
-				# provide a warning if the default type doesn't match the input
-				warning "`" & sane & "` parameter in `" & $result.operationId &
-					"` is " & $jsKind & " but the default is " &
-					param.default.shortRepr & "; omitting code to supply the default"
-		# TODO: clean this up into a manually-constructed ladder to merge asserts
-		if useDefault:
-			# set default value for input
-			try:
-				defNode = param.default.toNewJsonNimNode
-			except ValueError as e:
-				error e.msg & ":\n" & param.default.pretty
-			opBody.add quote do:
-				if `saneIdent` == nil:
-					`inputsIdent`.add `insane`, `defNode`
-				else:
-					assert `saneIdent`.kind == `kindIdent`,
-						`errmsg` & $(`saneIdent`.kind)
-					`inputsIdent`.add `insane`, `saneIdent`
-		else:
-			# no default is available; use the argument
-			opBody.add quote do:
-				if `saneIdent` != nil:
-					assert `saneIdent`.kind == `kindIdent`,
-						`errmsg` & $(`saneIdent`.kind)
-					`inputsIdent`.add `insane`, `saneIdent`
+			result.parameters.safeAdd parameter, sane
 
 	result.ast = newStmtList()
-	result.ast.add newProc(opIdent, opJsParams, opBody)
+	result.ast.add result.makeProcWithNamedArguments(sane, root)
 	result.ok = true
 
 proc newPathItem(root: JsonNode; path: string; input: JsonNode): PathItem =
@@ -1188,6 +1193,28 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 					else:
 						warning "unable to make typedef for " & k
 					result.ast.add typeSection
+
+		let
+			jsP = newIdentNode("js")
+			kindP = newIdentNode("kind")
+			requiredP = newIdentNode("required")
+			defaultP = newIdentNode("default")
+		result.ast.add quote do:
+			proc validateParameter(`jsP`: JsonNode; `kindP`: JsonNodeKind;
+			  `requiredP`: bool; `defaultP`: JsonNode = nil): JsonNode =
+				## ensure an input is of the correct json type and yield
+				## a suitable default value when appropriate
+				if `jsP` == nil:
+					if `defaultP` != nil:
+						return validateParameter(`defaultP`, `kindP`,
+							required=`requiredP`)
+				assert `jsP`.kind == `kindP`,
+					$`kindP` & " expected; received " & $`jsP`.kind
+				result = `jsP`
+				if result == nil:
+					assert not `requiredP`, $`kindP` & " expected; received nil"
+					if `requiredP`:
+						result = newJNull()
 
 		for path in result.js.paths(result.schema):
 			for meth, op in path.operations.pairs:
