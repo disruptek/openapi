@@ -779,7 +779,7 @@ iterator nameClashes(parameters: Parameters; p: Parameter): Parameter =
 			# yield only identifier collisions
 			if name.eqIdent(existing.saneName):
 				warning "name `" & p.name & "` versus `" & existing.name & "`"
-				error "sane `" & name & "` matches `" & existing.saneName & "`"
+				warning "sane `" & name & "` matches `" & existing.saneName & "`"
 				yield existing
 
 proc add(parameters: var Parameters; p: Parameter): Option[string] =
