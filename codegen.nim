@@ -922,7 +922,7 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 		var
 			sane = param.saneName
 		if param.description != "":
-			opBody.add newCommentStmtNode(sane & ": " & op.description)
+			opBody.add newCommentStmtNode(sane & ": " & param.description)
 		if param.required:
 			opJsParams.add param.toJsonIdentDefs
 
