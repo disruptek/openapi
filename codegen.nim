@@ -695,7 +695,7 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
 
 template cappableAdd(s: var string; c: char) =
 	## add a char to a string, perhaps capitalizing it
-	if s.len == 0 or s[^1] == '_':
+	if s.len > 0 and s[^1] == '_':
 		s.add c.toUpperAscii()
 	else:
 		s.add c
@@ -778,6 +778,8 @@ iterator nameClashes(parameters: Parameters; p: Parameter): Parameter =
 					continue
 			# yield only identifier collisions
 			if name.eqIdent(existing.saneName):
+				warning "name `" & p.name & "` versus `" & existing.name & "`"
+				error "sane `" & name & "` matches `" & existing.saneName & "`"
 				yield existing
 
 proc add(parameters: var Parameters; p: Parameter): Option[string] =
@@ -933,7 +935,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 	var
 		opJsAssertions = newStmtList()
 		opBody = newStmtList()
-		opJsParams: seq[NimNode] = @[newEmptyNode()]
+		opJsParams: seq[NimNode] = @[newIdentNode("JsonNode")]
 	
 	# add required params first,
 	for param in result.parameters:
@@ -951,9 +953,9 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 			opJsParams.add param.toJsonIdentDefs
 
 	opBody.add opJsAssertions
-	let inputsIdent = newIdentNode("inputs")
+	let inputsIdent = newIdentNode("result")
 	opBody.add quote do:
-		var `inputsIdent` = newJObject()
+		`inputsIdent` = newJObject()
 
 	# assert proper parameter types and/or set defaults
 	for param in result.parameters:
@@ -988,18 +990,18 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 				error e.msg & ":\n" & param.default.pretty
 			opBody.add quote do:
 				if `saneIdent` == nil:
-					inputs.add `insane`, `defNode`
+					`inputsIdent`.add `insane`, `defNode`
 				else:
 					assert `saneIdent`.kind == `kindIdent`,
 						`errmsg` & $(`saneIdent`.kind)
-					inputs.add `insane`, `saneIdent`
+					`inputsIdent`.add `insane`, `saneIdent`
 		else:
 			# no default is available; use the argument
 			opBody.add quote do:
 				if `saneIdent` != nil:
 					assert `saneIdent`.kind == `kindIdent`,
 						`errmsg` & $(`saneIdent`.kind)
-					inputs.add `insane`, `saneIdent`
+					`inputsIdent`.add `insane`, `saneIdent`
 
 	result.ast = newStmtList()
 	result.ast.add newProc(opIdent, opJsParams, opBody)
