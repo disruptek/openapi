@@ -55,6 +55,7 @@ type
 	Operation = object of ConsumeResult
 		meth*: HttpOpName
 		path*: string
+		description*: string
 		operationId*: string
 		parameters*: Parameters
 		responses*: seq[Response]
@@ -670,14 +671,19 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
 	## instantiate a new parameter from a JsonNode schema
 	assert input != nil and input.kind == JObject, "bizarre input: " &
 		input.pretty
-	var js = root.pluckRefJson(input)
+	var
+		js = root.pluckRefJson(input)
+		documentation = input.pluckString("description")
 	if js == nil:
 		js = input
+	elif documentation.isNone:
+		documentation = js.pluckString("description")
 	result = Parameter(ok: false, js: js)
 	result.name = js["name"].getStr
 	result.location = parseEnum[ParameterIn](js["in"].getStr)
 	result.required = js.getOrDefault("required").getBool
-	result.description = js.getOrDefault("description").getStr
+	if documentation.isSome:
+		result.description = documentation.get()
 	result.default = js.getOrDefault("default")
 
 	# `source` is a pointer to the JsonNode that defines the
@@ -903,12 +909,18 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 		opBody = newStmtList()
 		opJsParams: seq[NimNode] = @[newIdentNode("JsonNode")]
 	
+	# add documentation if available
+	if op.description != "":
+		opBody.add newCommentStmtNode(op.description & "\n")
+
 	# add required params first,
 	for param in op.parameters:
+		var
+			sane = param.saneName
+		if param.description != "":
+			opBody.add newCommentStmtNode(sane & ": " & op.description)
 		if param.required:
 			opJsParams.add param.toJsonIdentDefs
-			var
-				saneIdent = newIdentNode(param.saneName)
 
 	# then add optional params
 	for param in op.parameters:
@@ -973,10 +985,16 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 	## create a new operation for a given http method on a given path
 	var
 		response: Response
-	var js = root.pluckRefJson(input)
+		js = root.pluckRefJson(input)
+		documentation = input.pluckString("description")
 	if js == nil:
 		js = input
+	# if the ref has a description, use that if needed
+	elif documentation.isNone:
+		documentation = input.pluckString("description")
 	result = Operation(ok: false, meth: meth, path: path.path, js: js)
+	if documentation.isSome:
+		result.description = documentation.get()
 	result.operationId = js.getOrDefault("operationId").getStr
 	if result.operationId == "":
 		var msg = "operationId not defined for " & toUpperAscii($meth)
