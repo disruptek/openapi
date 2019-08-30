@@ -906,9 +906,13 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 		opIdent = newExportedIdentNode(name)
 		validIdent = newIdentNode("valid")
 	var
+		pragmas = newNimNode(nnkPragma)
 		opBody = newStmtList()
 		opJsParams: seq[NimNode] = @[newIdentNode("JsonNode")]
 	
+	if op.deprecated:
+		pragmas.add newIdentNode("deprecated")
+
 	# add documentation if available
 	if op.description != "":
 		opBody.add newCommentStmtNode(op.description & "\n")
@@ -979,7 +983,11 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 			opBody.add quote do:
 				if `validIdent` != nil:
 					`inputsIdent`.add(`insane`, `validIdent`)
-	result = newProc(opIdent, opJsParams, opBody)
+
+	if pragmas.len > 0:
+		result = newProc(opIdent, opJsParams, opBody, pragmas = pragmas)
+	else:
+		result = newProc(opIdent, opJsParams, opBody)
 
 proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
 	## create a new operation for a given http method on a given path
