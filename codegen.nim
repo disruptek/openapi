@@ -1164,6 +1164,12 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 	# parameters for this particular http method
 	if "parameters" in js:
 		for parameter in root.readParameters(js["parameters"]):
+			if parameter.location == InPath:
+				let parsed = parseTemplate(path.path)
+				if not parsed.ok:
+					error $parameter & " provided but path `" & $path & "` invalid"
+				if parameter.name notin parsed.variables:
+					error $parameter & " provided but not in path `" & $path & "`"
 			if not result.parameters.safeAdd(parameter, sane):
 				error "fatal!"
 
