@@ -1345,13 +1345,14 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 					if `defaultP` != nil:
 						return validateParameter(`defaultP`, `kindP`,
 							required=`requiredP`)
-				assert `jsP`.kind == `kindP`,
-					$`kindP` & " expected; received " & $`jsP`.kind
 				result = `jsP`
 				if result == nil:
 					assert not `requiredP`, $`kindP` & " expected; received nil"
 					if `requiredP`:
 						result = newJNull()
+				else:
+					assert `jsP`.kind == `kindP`,
+						$`kindP` & " expected; received " & $`jsP`.kind
 
 		for path in result.js.paths(result.schema):
 			for meth, op in path.operations.pairs:
