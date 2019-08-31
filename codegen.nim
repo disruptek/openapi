@@ -989,16 +989,19 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
 				jsKind = param.jsonKind(root)
 				kindIdent = newIdentNode($jsKind)
 				reqIdent = newIdentNode($param.required)
-			required = required or param.required
+			if not required:
+				required = required or param.required
+				if required:
+					let msg = loco & " argument is required due to required `" &
+						param.name & "` field"
+					opBody.add quote do:
+						assert `locIdent` != nil, `msg`
 			opBody.add quote do:
 				`validIdent` = `locIdent`.getOrDefault(`name`)
 				`validIdent` = validateParameter(valid, `kindIdent`,
 					required= `reqIdent`, default= `defNode`)
 				if `validIdent` != nil:
 					`sectionIdent`.add `name`, `validIdent`
-		if required:
-			opBody.add quote do:
-				assert `locIdent` != nil
 		opBody.add quote do:
 			`inputsIdent`.add `loco`, `sectionIdent`
 
