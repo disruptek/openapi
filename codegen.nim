@@ -707,46 +707,48 @@ template cappableAdd(s: var string; c: char) =
 	else:
 		s.add c
 
-proc sanitizeIdentifier(name: string; capsOkay=false): string =
+proc sanitizeIdentifier(name: string; capsOkay=false): Option[string] =
 	## convert any string to a valid nim identifier in camel_Case
-	if name.validNimIdentifier:
-		return name
+	var id = ""
 	if name.len == 0:
-		raise newException(ValueError, "empty identifier")
+		return
 	for c in name:
-		if result.len == 0:
+		if id.len == 0:
 			if c in IdentStartChars:
-				result.cappableAdd c
+				id.cappableAdd c
 				continue
 		elif c in IdentChars:
-			result.cappableAdd c
+			id.cappableAdd c
 			continue
 		# help differentiate words case-insensitively
-		result.add '_'
-	while "__" in result:
-		result = result.replace("__", "_")
-	if result.len > 1:
-		result.removeSuffix {'_'}
-		result.removePrefix {'_'}
-	if result[0] notin IdentStartChars:
-		raise newException(ValueError,
-			"identifiers cannot start with `" & result[0] & "`")
+		id.add '_'
+	while "__" in id:
+		id = id.replace("__", "_")
+	if id.len > 1:
+		id.removeSuffix {'_'}
+		id.removePrefix {'_'}
 	# if we need to lowercase the first letter, we'll lowercase
 	# until we hit a word boundary (_, digit, or lowercase char)
-	if not capsOkay and result[0].isUpperAscii:
-		for i in result.low..result.high:
-			if result[i] in ['_', result[i].toLowerAscii]:
+	if not capsOkay and id[0].isUpperAscii:
+		for i in id.low..id.high:
+			if id[i] in ['_', id[i].toLowerAscii]:
 				break
-			result[i] = result[i].toLowerAscii
-	assert result.validNimIdentifier, "bad identifier: " & result
+			id[i] = id[i].toLowerAscii
+	# ensure we're not, for example, starting with a digit
+	if id[0] notin IdentStartChars:
+		warning "identifiers cannot start with `" & id[0] & "`"
+		return
+	if not id.validNimIdentifier:
+		warning "bad identifier: " & id
+		return
+	result = some(id)
 
 proc saneName(param: Parameter): string =
 	## produce a safe identifier for the given parameter
-	try:
-		return sanitizeIdentifier(param.name, capsOkay=true)
-	except ValueError:
-		raise newException(ValueError,
-			"unable to compose valid identifier for parameter `" & param.name & "`")
+	let id = sanitizeIdentifier(param.name, capsOkay=true)
+	if id.isNone:
+		error "unable to compose valid identifier for parameter `" & param.name & "`"
+	result = id.get()
 
 proc saneName(op: Operation): string =
 	## produce a safe identifier for the given operation
@@ -757,12 +759,10 @@ proc saneName(op: Operation): string =
 	# TODO: turn path /some/{var_name}/foo_bar into some_varName_fooBar?
 	attempt.add $op.meth & "_" & op.path
 	for name in attempt:
-		try:
-			return sanitizeIdentifier(name, capsOkay=false)
-		except ValueError:
-			discard
-	raise newException(ValueError,
-		"unable to compose valid identifier; attempted these: " & attempt.repr)
+		var id = sanitizeIdentifier(name, capsOkay=false)
+		if id.isSome:
+			return id.get()
+	error "unable to compose valid identifier; attempted these: " & attempt.repr
 
 proc hash(p: Parameter): Hash =
 	## parameter cardinality is a function of name and location
