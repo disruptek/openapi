@@ -543,6 +543,7 @@ proc guessType(js: JsonNode; root: JsonNode): GuessTypeResult =
 				# we'll return if we cannot recognize the type
 				warning "no type discovered:\n" & input.pretty
 				return (ok: false, major: JNull, minor: "")
+		assert major != "", "logic error; ie. someone forgot to add logic"
 		let
 			format = input.getOrDefault("format").getStr
 			kind = major.guessJsonNodeKind()
