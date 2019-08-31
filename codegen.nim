@@ -764,6 +764,21 @@ proc saneName(op: Operation): string =
 			return id.get()
 	error "unable to compose valid identifier; attempted these: " & attempt.repr
 
+proc `$`*(path: PathItem): string =
+	## render a path item for error message purposes
+	if path.host != "":
+		result = path.host
+	if path.basePath != "/":
+		result.add path.basePath
+	result.add path.path
+
+proc `$`*(op: Operation): string =
+	## render an operation for error message purposes
+	result = op.saneName
+
+proc `$`*(param: Parameter): string =
+	result = $param.saneName & "(" & $param.location & "-`" & param.name & "`)"
+
 proc hash(p: Parameter): Hash =
 	## parameter cardinality is a function of name and location
 	result = p.location.hash !& p.name.hash
@@ -800,36 +815,33 @@ iterator nameClashes(parameters: Parameters; p: Parameter): Parameter =
 				warning "sane `" & name & "` matches `" & existing.saneName & "`"
 				yield existing
 
-proc add(parameters: var Parameters; p: Parameter): Option[string] =
+proc add(parameters: var Parameters; p: Parameter) =
 	## simpler add explicitly using hash
 	let
 		location = $p.location
 		name = p.saneName
 
-	for existing in parameters.nameClashes(p):
-		# for an add, we don't care if the location doesn't match
-		if existing.location != p.location:
-			continue
-		# the names have to match, not just their identifier versions
-		if existing.name == p.name:
-			return some(existing.name)
-		# otherwise, we should probably figure out alternative logic
-		error "identifiers match but names don't: `" & existing.name &
-			"` versus `" & p.name & "`"
 	parameters.sane[name] = location
-	parameters.tab.add p.hash, p
+	parameters.tab[p.hash] = p
 	parameters.forms.incl p.location
 
-proc safeAdd(params: var Parameters; p: Parameter; prefix="") =
+proc safeAdd(parameters: var Parameters; p: Parameter; prefix=""): bool =
 	## attempt to add a parameter to the container, erroring if it clashes
-	let clashed = params.add p
-	if clashed.isNone:
-		return
-	var msg = "parameter `" & clashed.get() & "` in " & $p.location &
-		" and `" & p.name & "` yield the same Nim identifier"
-	if prefix != "":
-		msg = prefix & ": " & msg
-	error msg
+	for clash in parameters.nameClashes(p):
+		# this could be a replacement/override of an existing parameter
+		if clash.location == p.location:
+			# the names have to match, not just their identifier versions
+			if clash.name == p.name:
+				continue
+		# otherwise, we should probably figure out alternative logic
+		var msg = "parameter " & $clash & " and " & $p &
+			" yield the same Nim identifier"
+		if prefix != "":
+			msg = prefix & ": " & msg
+		warning msg
+		return false
+	parameters.add p
+	result = true
 
 proc initParameters(parameters: var Parameters) =
 	## prepare a parameter container to accept parameters
@@ -837,7 +849,7 @@ proc initParameters(parameters: var Parameters) =
 	parameters.tab = initTable[Hash, Parameter]()
 	parameters.forms = {}
 
-proc readParameters(root: JsonNode; js: JsonNode; prefix=""): Parameters =
+proc readParameters(root: JsonNode; js: JsonNode): Parameters =
 	## parse parameters out of an arbitrary JsonNode
 	result.initParameters()
 	for param in js:
@@ -845,7 +857,7 @@ proc readParameters(root: JsonNode; js: JsonNode; prefix=""): Parameters =
 		if not parameter.ok:
 			error "bad parameter:\n" & param.pretty
 			continue
-		result.safeAdd parameter, prefix
+		result.add parameter
 
 proc newResponse(root: JsonNode; status: string; input: JsonNode): Response =
 	## create a new Response
@@ -935,6 +947,16 @@ proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
 	else:
 		result = newNilLit()
 
+proc documentation(p: Parameter; root: JsonNode): NimNode =
+	var
+		docs = "  " & p.name & ": " & $p.jsonKind(root)
+	if p.required:
+		docs &= " (required)"
+	if p.description != "":
+		docs &= "\n" & spaces(2 + p.name.len) & ": "
+		docs &= p.description
+	result = newCommentStmtNode(docs)
+
 proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): NimNode =
 	let
 		opIdent = newExportedIdentNode("prepare" & name.capitalizeAscii)
@@ -970,14 +992,7 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
 		required = false
 		opBody.add newCommentStmtNode("parameters in `" & loco & "` object:")
 		for param in op.parameters.forLocation(location):
-			var
-				docs = "  " & param.name & ": " & $param.jsonKind(root)
-			if param.required:
-				docs &= " (required)"
-			if param.description != "":
-				docs &= "\n" & spaces(2 + param.name.len) & ": "
-				docs &= param.description
-			opBody.add newCommentStmtNode(docs)
+			opBody.add param.documentation(root)
 		opJsParams.add locIdent.toJsonParameter(false)
 
 		opBody.add quote do:
@@ -1031,8 +1046,7 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 		var
 			sane = param.saneName
 			saneIdent = newIdentNode(sane)
-		if param.description != "":
-			opBody.add newCommentStmtNode(sane & ": " & param.description)
+		opBody.add param.documentation(root)
 		if param.required:
 			opJsParams.add saneIdent.toJsonParameter(param.required)
 
@@ -1141,11 +1155,13 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 	result.parameters.initParameters()
 	# inherited parameters from the PathItem
 	for parameter in path.parameters:
-		result.parameters.safeAdd parameter, sane
+		if not result.parameters.safeAdd(parameter, sane):
+			error "fatal!"
 	# parameters for this particular http method
 	if "parameters" in js:
 		for parameter in root.readParameters(js["parameters"]):
-			result.parameters.safeAdd parameter, sane
+			if not result.parameters.safeAdd(parameter, sane):
+				error "fatal!"
 
 	result.ast = newStmtList()
 	result.ast.add result.makeProcWithNamedArguments(sane, root)
@@ -1172,7 +1188,7 @@ proc newPathItem(root: JsonNode; path: string; input: JsonNode): PathItem =
 
 	# record default parameters for the path
 	if "parameters" in input:
-		result.parameters = root.readParameters(input["parameters"], path)
+		result.parameters = root.readParameters(input["parameters"])
 
 	# look for operation names in the input
 	for opName in HttpOpName:
@@ -1226,18 +1242,6 @@ iterator paths(root: JsonNode; ftype: FieldTypeDef): PathItem =
 				continue
 			yield root.newPathItem(k, v)
 		break
-
-proc `$`*(path: PathItem): string =
-	## render a path item for error message purposes
-	if path.host != "":
-		result = path.host
-	if path.basePath != "/":
-		result.add path.basePath
-	result.add path.path
-
-proc `$`*(op: Operation): string =
-	## render an operation for error message purposes
-	result = op.saneName
 
 iterator wrapOneType(ftype: FieldTypeDef; name: string; input: JsonNode): WrappedItem {.deprecated.} =
 	case ftype.kind:
