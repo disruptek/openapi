@@ -961,12 +961,37 @@ proc documentation(p: Parameter; root: JsonNode): NimNode =
 		docs &= p.description
 	result = newCommentStmtNode(docs)
 
+proc sectionParameter(param: Parameter; root: JsonNode; section: NimNode; default: NimNode = nil): NimNode =
+	result = newStmtList([])
+	var
+		name = param.name
+		jsKind = param.jsonKind(root)
+		kindIdent = newIdentNode($jsKind)
+		reqIdent = newIdentNode($param.required)
+		locIdent = newIdentNode($param.location)
+		validIdent = genSym(ident="valid")
+		defNode = if default == nil: newNilLit() else: default
+	# you might think `locIdent`.getOrDefault() would be a good place to simply
+	# instantiate our default JsonNode, but the validateParameter() is a more
+	# central place to validate/log both the input and the default value,
+	# particularly since we aren't going to unwrap the 'body' parameter
+	if param.location == InBody:
+		result.add quote do:
+			var `validIdent` = `locIdent`
+	else:
+		result.add quote do:
+			var `validIdent` = `locIdent`.getOrDefault(`name`)
+	result.add quote do:
+		`validIdent` = validateParameter(`validIdent`, `kindIdent`,
+			required= `reqIdent`, default= `defNode`)
+		if `validIdent` != nil:
+			`section`.add `name`, `validIdent`
+
 proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): NimNode =
 	let
 		opIdent = newExportedIdentNode("prepare" & name.capitalizeAscii)
-		validIdent = newIdentNode("valid")
 		inputsIdent = newIdentNode("result")
-		sectionIdent = newIdentNode("section")
+		section = genSym(ident="section")
 	var
 		pragmas = newNimNode(nnkPragma)
 		opBody = newStmtList()
@@ -982,8 +1007,7 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
 	if op.parameters.len > 0:
 		opBody.add quote do:
 			var
-				`validIdent`: JsonNode
-				`sectionIdent`: JsonNode
+				`section`: JsonNode
 
 	opBody.add quote do:
 		`inputsIdent` = newJObject()
@@ -1000,29 +1024,19 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
 		opJsParams.add locIdent.toJsonParameter(false)
 
 		opBody.add quote do:
-			`sectionIdent` = newJObject()
+			`section` = newJObject()
 		for param in op.parameters.forLocation(location):
-			var
-				name = param.name
-				defNode = op.defaultNode(param, root)
-				jsKind = param.jsonKind(root)
-				kindIdent = newIdentNode($jsKind)
-				reqIdent = newIdentNode($param.required)
+			let default = op.defaultNode(param, root)
 			if not required:
 				required = required or param.required
 				if required:
-					let msg = loco & " argument is required due to required `" &
+					let msg = loco & " argument is necessary due to required `" &
 						param.name & "` field"
 					opBody.add quote do:
 						assert `locIdent` != nil, `msg`
-			opBody.add quote do:
-				`validIdent` = `locIdent`.getOrDefault(`name`)
-				`validIdent` = validateParameter(valid, `kindIdent`,
-					required= `reqIdent`, default= `defNode`)
-				if `validIdent` != nil:
-					`sectionIdent`.add `name`, `validIdent`
+			opBody.add param.sectionParameter(root, section, default=default)
 		opBody.add quote do:
-			`inputsIdent`.add `loco`, `sectionIdent`
+			`inputsIdent`.add `loco`, `section`
 
 	if pragmas.len > 0:
 		result = newProc(opIdent, opJsParams, opBody, pragmas = pragmas)
