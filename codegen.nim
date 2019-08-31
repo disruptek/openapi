@@ -47,6 +47,7 @@ type
 	Parameters = object
 		sane: StringTableRef
 		tab: Table[Hash, Parameter]
+		forms: set[ParameterIn]
 
 	Response = object of ConsumeResult
 		status: string
@@ -777,6 +778,13 @@ iterator items(parameters: Parameters): Parameter =
 	for p in parameters.tab.values:
 		yield p
 
+iterator forLocation(parameters: Parameters; loc: ParameterIn): Parameter =
+	## iterate over parameters with the given location
+	if loc in parameters.forms:
+		for p in parameters:
+			if p.location == loc:
+				yield p
+
 iterator nameClashes(parameters: Parameters; p: Parameter): Parameter =
 	## yield clashes that don't produce parameter "overrides" (identity)
 	let name = p.saneName
@@ -810,6 +818,7 @@ proc add(parameters: var Parameters; p: Parameter): Option[string] =
 			"` versus `" & p.name & "`"
 	parameters.sane[name] = location
 	parameters.tab.add p.hash, p
+	parameters.forms.incl p.location
 
 proc safeAdd(params: var Parameters; p: Parameter; prefix="") =
 	## attempt to add a parameter to the container, erroring if it clashes
@@ -826,6 +835,7 @@ proc initParameters(parameters: var Parameters) =
 	## prepare a parameter container to accept parameters
 	parameters.sane = newStringTable(modeStyleInsensitive)
 	parameters.tab = initTable[Hash, Parameter]()
+	parameters.forms = {}
 
 proc readParameters(root: JsonNode; js: JsonNode; prefix=""): Parameters =
 	## parse parameters out of an arbitrary JsonNode
@@ -847,10 +857,9 @@ proc newResponse(root: JsonNode; status: string; input: JsonNode): Response =
 	# TODO: save the schema
 	result.ok = true
 
-proc toJsonIdentDefs(param: Parameter): NimNode =
+proc toJsonParameter(name: NimNode; required: bool): NimNode =
 	## create the right-hand side of a JsonNode typedef for the given parameter
-	let name = newIdentNode(param.saneName)
-	if param.required:
+	if required:
 		result = newIdentDefs(name, newIdentNode("JsonNode"))
 	else:
 		result = newIdentDefs(name, newIdentNode("JsonNode"), newNilLit())
@@ -901,6 +910,103 @@ proc shortRepr(js: JsonNode): string =
 	## render a JInt(3) as "JInt(3)"; will puke on arrays/objects/null
 	result = $js.kind & "(" & $js & ")"
 
+proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
+	## generate nim to instantiate the default value for the parameter
+	var useDefault = false
+	let
+		jsKind = param.jsonKind(root)
+		sane = param.saneName
+	if param.default != nil:
+		if jsKind == param.default.kind:
+			useDefault = true
+		else:
+			# provide a warning if the default type doesn't match the input
+			warning "`" & sane & "` parameter in `" & $op.operationId &
+				"` is " & $jsKind & " but the default is " &
+				param.default.shortRepr & "; omitting code to supply the default"
+
+	if useDefault:
+		# set default value for input
+		try:
+			result = param.default.toNewJsonNimNode
+		except ValueError as e:
+			error e.msg & ":\n" & param.default.pretty
+		assert result != nil
+	else:
+		result = newNilLit()
+
+proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): NimNode =
+	let
+		opIdent = newExportedIdentNode("prepare" & name.capitalizeAscii)
+		validIdent = newIdentNode("valid")
+		inputsIdent = newIdentNode("result")
+		sectionIdent = newIdentNode("section")
+	var
+		pragmas = newNimNode(nnkPragma)
+		opBody = newStmtList()
+		opJsParams: seq[NimNode] = @[newIdentNode("JsonNode")]
+	
+	if op.deprecated:
+		pragmas.add newIdentNode("deprecated")
+
+	# add documentation if available
+	if op.description != "":
+		opBody.add newCommentStmtNode(op.description & "\n")
+
+	if op.parameters.len > 0:
+		opBody.add quote do:
+			var
+				`validIdent`: JsonNode
+				`sectionIdent`: JsonNode
+
+	opBody.add quote do:
+		`inputsIdent` = newJObject()
+
+	for location in op.parameters.forms:
+		var
+			required: bool
+			loco = $location
+			locIdent = newIdentNode(loco)
+		required = false
+		opBody.add newCommentStmtNode("parameters in `" & loco & "` object:")
+		for param in op.parameters.forLocation(location):
+			var
+				docs = "  " & param.name & ": " & $param.jsonKind(root)
+			if param.required:
+				docs &= " (required)"
+			if param.description != "":
+				docs &= "\n" & spaces(2 + param.name.len) & ": "
+				docs &= param.description
+			opBody.add newCommentStmtNode(docs)
+		opJsParams.add locIdent.toJsonParameter(false)
+
+		opBody.add quote do:
+			`sectionIdent` = newJObject()
+		for param in op.parameters.forLocation(location):
+			var
+				name = param.name
+				defNode = op.defaultNode(param, root)
+				jsKind = param.jsonKind(root)
+				kindIdent = newIdentNode($jsKind)
+				reqIdent = newIdentNode($param.required)
+			required = required or param.required
+			opBody.add quote do:
+				`validIdent` = `locIdent`.getOrDefault(`name`)
+				`validIdent` = validateParameter(valid, `kindIdent`,
+					required= `reqIdent`, default= `defNode`)
+				if `validIdent` != nil:
+					`sectionIdent`.add `name`, `validIdent`
+		if required:
+			opBody.add quote do:
+				assert `locIdent` != nil
+		opBody.add quote do:
+			`inputsIdent`.add `loco`, `sectionIdent`
+
+	if pragmas.len > 0:
+		result = newProc(opIdent, opJsParams, opBody, pragmas = pragmas)
+	else:
+		result = newProc(opIdent, opJsParams, opBody)
+
 proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): NimNode =
 	let
 		opIdent = newExportedIdentNode(name)
@@ -921,15 +1027,19 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 	for param in op.parameters:
 		var
 			sane = param.saneName
+			saneIdent = newIdentNode(sane)
 		if param.description != "":
 			opBody.add newCommentStmtNode(sane & ": " & param.description)
 		if param.required:
-			opJsParams.add param.toJsonIdentDefs
+			opJsParams.add saneIdent.toJsonParameter(param.required)
 
 	# then add optional params
 	for param in op.parameters:
+		var
+			sane = param.saneName
+			saneIdent = newIdentNode(sane)
 		if not param.required:
-			opJsParams.add param.toJsonIdentDefs
+			opJsParams.add saneIdent.toJsonParameter(param.required)
 
 	let inputsIdent = newIdentNode("result")
 	if op.parameters.len > 0:
@@ -963,7 +1073,7 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 				warning "`" & sane & "` parameter in `" & $op.operationId &
 					"` is " & $jsKind & " but the default is " &
 					param.default.shortRepr & "; omitting code to supply the default"
-		# TODO: clean this up into a manually-constructed ladder to merge asserts
+
 		if useDefault:
 			# set default value for input
 			try:
@@ -1036,6 +1146,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 
 	result.ast = newStmtList()
 	result.ast.add result.makeProcWithNamedArguments(sane, root)
+	result.ast.add result.makeProcWithLocationInputs(sane, root)
 	result.ok = true
 
 proc newPathItem(root: JsonNode; path: string; input: JsonNode): PathItem =
