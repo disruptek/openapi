@@ -148,19 +148,18 @@ proc toValidIdentifier(name: string; star=true): NimNode =
 	else:
 		result = toValidIdentifier("oa" & name.replace("__", "_"), star=star)
 
-proc guessJsonNodeKind(name: string): JsonNodeKind =
+proc guessJsonNodeKind(name: string): Option[JsonNodeKind] =
 	## map openapi type names to their json node types
-	result = case name:
-	of "integer": JInt
-	of "number": JFloat
-	of "string": JString
-	of "file": JString
-	of "boolean": JBool
-	of "array": JArray
-	of "object": JObject
-	of "null": JNull
-	else:
-		raise newException(Defect, "unknown type: " & name)
+	case name:
+	of "integer": result = some(JInt)
+	of "number": result = some(JFloat)
+	of "string": result = some(JString)
+	of "file": result = some(JString)
+	of "boolean": result = some(JBool)
+	of "array": result = some(JArray)
+	of "object": result = some(JObject)
+	of "null": result = some(JNull)
+	else: discard
 
 proc isKnownFormat(major: JsonNodeKind; format=""): bool =
 	## it is known (and appropriate to the major)
@@ -202,11 +201,6 @@ proc conjugateFieldType(major: JsonNodeKind; format=""): FieldTypeDef =
 	if not major.isKnownFormat(format):
 		warning $major & " type has unknown format `" & format & "`"
 	result = major.toFieldTypeDef
-
-when false:
-	proc conjugateFieldType(name: string; format=""): FieldTypeDef =
-		let major = name.guessJsonNodeKind()
-		result = major.conjugateFieldType(format=format)
 
 converter toNimNode(ftype: FieldTypeDef): NimNode =
 	## render a fieldtypedef as nimnode
@@ -413,7 +407,6 @@ proc defineObjectOrMap(input: JsonNode): NimNode =
 proc parseTypeDef(input: JsonNode): FieldTypeDef =
 	## convert a typedef from json; eg. we may expect to look
 	## for a type="something" and/or format="something-else"
-	result = input.kind.toFieldTypeDef()
 	case input.kind:
 	of JObject:
 		if "type" in input:
@@ -421,12 +414,17 @@ proc parseTypeDef(input: JsonNode): FieldTypeDef =
 				major = input["type"].getStr
 				#minor = input.getOrDefault("format").getStr
 				kind = major.guessJsonNodeKind()
-			result = kind.toFieldTypeDef()
+			if kind.isSome:
+				result = kind.get().toFieldTypeDef()
+				return
 	of JArray:
 		if "items" in input:
+			result = input.kind.toFieldTypeDef()
 			result.member = input["items"].parseTypeDef()
+			return
 	else:
 		discard
+	result = input.kind.toFieldTypeDef()
 
 proc parseTypeDefOrRef(input: JsonNode): NimNode =
 	## convert a typedef from json to nimnode; this one will
@@ -548,7 +546,8 @@ proc guessType(js: JsonNode; root: JsonNode): GuessTypeResult =
 		let
 			format = input.getOrDefault("format").getStr
 			kind = major.guessJsonNodeKind()
-		result = (ok: true, major: kind, minor: format)
+		if kind.isSome:
+			result = (ok: true, major: kind.get(), minor: format)
 	else:
 		result = (ok: true, major: input.kind, minor: "")
 
