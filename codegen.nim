@@ -661,12 +661,12 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Typ
 	result.ast.add right
 	result.ok = true
 
-proc jsonKind(param: Parameter; root: JsonNode): JsonNodeKind =
+proc jsonKind(param: Parameter; root: JsonNode): Option[JsonNodeKind] =
 	## determine the type of a parameter
 	let kind = param.source.guessType(root)
-	if not kind.ok:
-		raise newException(ValueError, "unable to guess type:\n" & param.js.pretty)
-	result = kind.major
+	if kind.ok:
+		result = some(kind.major)
+	warning "unable to guess type:\n" & param.js.pretty
 
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
 	## instantiate a new parameter from a JsonNode schema
@@ -929,15 +929,18 @@ proc shortRepr(js: JsonNode): string =
 proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
 	## generate nim to instantiate the default value for the parameter
 	var useDefault = false
-	let
-		jsKind = param.jsonKind(root)
-		sane = param.saneName
 	if param.default != nil:
-		if jsKind == param.default.kind:
+		let
+			jsKind = param.jsonKind(root)
+			sane = param.saneName
+		if jsKind.isNone:
+			warning "unable to parse default value for parameter `" & sane &
+			"`:\n" & param.js.pretty
+		elif jsKind.get() == param.default.kind:
 			useDefault = true
 		else:
 			# provide a warning if the default type doesn't match the input
-			warning "`" & sane & "` parameter in `" & $op.operationId &
+			warning "`" & sane & "` parameter in `" & $op &
 				"` is " & $jsKind & " but the default is " &
 				param.default.shortRepr & "; omitting code to supply the default"
 
@@ -953,7 +956,7 @@ proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
 
 proc documentation(p: Parameter; root: JsonNode): NimNode =
 	var
-		docs = "  " & p.name & ": " & $p.jsonKind(root)
+		docs = "  " & p.name & ": " & $p.jsonKind(root).get()
 	if p.required:
 		docs &= " (required)"
 	if p.description != "":
@@ -965,12 +968,14 @@ proc sectionParameter(param: Parameter; root: JsonNode; section: NimNode; defaul
 	result = newStmtList([])
 	var
 		name = param.name
-		jsKind = param.jsonKind(root)
-		kindIdent = newIdentNode($jsKind)
 		reqIdent = newIdentNode($param.required)
 		locIdent = newIdentNode($param.location)
 		validIdent = genSym(ident="valid")
 		defNode = if default == nil: newNilLit() else: default
+		jsKind = param.jsonKind(root)
+	assert jsKind.isSome, "fatal failure to infer type for parameter " & $param
+	var
+		kindIdent = newIdentNode($jsKind.get())
 	# you might think `locIdent`.getOrDefault() would be a good place to simply
 	# instantiate our default JsonNode, but the validateParameter() is a more
 	# central place to validate/log both the input and the default value,
@@ -1089,38 +1094,21 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 			insane = param.name
 			sane = param.saneName
 			saneIdent = newIdentNode(sane)
-			jsKind = param.jsonKind(root)
-			kindIdent = newIdentNode($jsKind)
 			reqIdent = newIdentNode($param.required)
-			useDefault = false
-			defNode: NimNode
+			default = op.defaultNode(param, root)
 			errmsg: string
+			jsKind = param.jsonKind(root)
+		assert jsKind.isSome, "fatal failure to infer type for parameter " & $param
+		var
+			kindIdent = newIdentNode($jsKind.get())
 		errmsg = "expected " & $jsKind & " for `" & sane & "` but received "
 		for clash in op.parameters.nameClashes(param):
 			error "identifier clash in proc arguments: " & $clash.location & "-`" &
 			clash.name & "` versus " & $param.location & "-`" & param.name & "`"
 
-		if param.default != nil:
-			if jsKind == param.default.kind:
-				useDefault = true
-			else:
-				# provide a warning if the default type doesn't match the input
-				warning "`" & sane & "` parameter in `" & $op.operationId &
-					"` is " & $jsKind & " but the default is " &
-					param.default.shortRepr & "; omitting code to supply the default"
-
-		if useDefault:
-			# set default value for input
-			try:
-				defNode = param.default.toNewJsonNimNode
-			except ValueError as e:
-				error e.msg & ":\n" & param.default.pretty
-		else:
-			defNode = newNilLit()
-
 		opBody.add quote do:
 			`validIdent` = validateParameter(`saneIdent`, `kindIdent`,
-				required=`reqIdent`, default=`defNode`)
+				required=`reqIdent`, default=`default`)
 		if param.required:
 			opBody.add quote do:
 				`inputsIdent`.add(`insane`, `validIdent`)
