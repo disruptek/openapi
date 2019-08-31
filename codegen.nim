@@ -1251,6 +1251,30 @@ iterator wrapOneType(ftype: FieldTypeDef; name: string; input: JsonNode): Wrappe
 	else:
 		warning "unable to wrap " & $ftype.kind
 
+proc prefixedPluck(js: JsonNode; field: string; indent=0): string =
+	result = indent.spaces & field & ": "
+	result &= js.pluckString(field).get("(not provided)") & "\n"
+
+proc renderLicense(js: JsonNode): string =
+	## render a license section for the preamble
+	result = "license:"
+	if js == nil:
+		return result & " (not provided)\n"
+	result &= "\n"
+	for field in ["name", "url"]:
+		result &= js.prefixedPluck(field, 4)
+
+proc renderPreface(js: JsonNode): string =
+	## produce a preamble suitable for documentation
+	result = "auto-generated via openapi macro\n"
+	if "info" in js:
+		let
+			info = js["info"]
+		for field in ["title", "version", "termsOfService"]:
+			result &= info.prefixedPluck(field)
+		result &= info.getOrDefault("license").renderLicense
+		result &= "\n" & info.pluckString("description").get("") & "\n"
+
 proc consume(content: string): ConsumeResult {.compileTime.} =
 	## parse a string which might hold an openapi definition
 	when false:
@@ -1293,8 +1317,10 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 		# FIXME: make sure we need tables before importing it
 		let imports = quote do:
 			import json
-		let preface = newCommentStmtNode "auto-generated via openapi macro"
-		result.ast = newStmtList [preface, imports]
+			
+		result.ast = newStmtList []
+		result.ast.add newCommentStmtNode(result.js.renderPreface)
+		result.ast.add imports
 
 		# deprecated
 		when false:
