@@ -666,7 +666,8 @@ proc jsonKind(param: Parameter; root: JsonNode): Option[JsonNodeKind] =
 	let kind = param.source.guessType(root)
 	if kind.ok:
 		result = some(kind.major)
-	warning "unable to guess type:\n" & param.js.pretty
+	else:
+		warning "unable to guess type:\n" & param.js.pretty
 
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
 	## instantiate a new parameter from a JsonNode schema
