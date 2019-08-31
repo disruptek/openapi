@@ -689,6 +689,10 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
 
 	# `source` is a pointer to the JsonNode that defines the
 	# format for the parameter; it can be overridden with `schema`
+	if result.location == InBody and "schema" notin js:
+		error "schema is required for " & $result & "\n" & js.pretty
+	elif result.location != InBody and "schema" in js:
+		error "schema is inappropriate for " & $result & "\n" & js.pretty
 	while "schema" in js:
 		js = js["schema"]
 		var source = root.pluckRefJson(js)
