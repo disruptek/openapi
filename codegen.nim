@@ -1047,7 +1047,7 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
 	else:
 		result = newProc(opIdent, opJsParams, opBody)
 
-proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): NimNode =
+proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Option[NimNode] =
 	let
 		opIdent = newExportedIdentNode(name)
 		validIdent = newIdentNode("valid")
@@ -1097,14 +1097,17 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 			default = op.defaultNode(param, root)
 			errmsg: string
 			jsKind = param.jsonKind(root)
-		assert jsKind.isSome, "fatal failure to infer type for parameter " & $param
+		if jsKind.isNone:
+			warning "failure to infer type for parameter " & $param
+			return
 		var
 			kindIdent = newIdentNode($jsKind.get())
 		errmsg = "expected " & $jsKind & " for `" & sane & "` but received "
 		for clash in op.parameters.nameClashes(param):
-			error "identifier clash in proc arguments: " & $clash.location & "-`" &
-			clash.name & "` versus " & $param.location & "-`" & param.name & "`"
-
+			warning "identifier clash in proc arguments: " & $clash.location &
+				"-`" & clash.name & "` versus " & $param.location & "-`" &
+				param.name & "`"
+			return
 		opBody.add quote do:
 			`validIdent` = validateParameter(`saneIdent`, `kindIdent`,
 				required=`reqIdent`, default=`default`)
@@ -1117,9 +1120,9 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Ni
 					`inputsIdent`.add(`insane`, `validIdent`)
 
 	if pragmas.len > 0:
-		result = newProc(opIdent, opJsParams, opBody, pragmas = pragmas)
+		result = some(newProc(opIdent, opJsParams, opBody, pragmas = pragmas))
 	else:
-		result = newProc(opIdent, opJsParams, opBody)
+		result = some(newProc(opIdent, opJsParams, opBody))
 
 proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
 	## create a new operation for a given http method on a given path
@@ -1177,7 +1180,9 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 				error badadd.get()
 
 	result.ast = newStmtList()
-	result.ast.add result.makeProcWithNamedArguments(sane, root)
+	let namedArgs = result.makeProcWithNamedArguments(sane, root)
+	if namedArgs.isSome:
+		result.ast.add namedArgs.get()
 	result.ast.add result.makeProcWithLocationInputs(sane, root)
 	result.ok = true
 
