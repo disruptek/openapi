@@ -830,7 +830,7 @@ proc add(parameters: var Parameters; p: Parameter) =
 	parameters.tab[p.hash] = p
 	parameters.forms.incl p.location
 
-proc safeAdd(parameters: var Parameters; p: Parameter; prefix=""): bool =
+proc safeAdd(parameters: var Parameters; p: Parameter; prefix=""): Option[string] =
 	## attempt to add a parameter to the container, erroring if it clashes
 	for clash in parameters.nameClashes(p):
 		# this could be a replacement/override of an existing parameter
@@ -843,10 +843,8 @@ proc safeAdd(parameters: var Parameters; p: Parameter; prefix=""): bool =
 			" yield the same Nim identifier"
 		if prefix != "":
 			msg = prefix & ": " & msg
-		warning msg
-		return false
+		return some(msg)
 	parameters.add p
-	result = true
 
 proc initParameters(parameters: var Parameters) =
 	## prepare a parameter container to accept parameters
@@ -1162,8 +1160,9 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 	result.parameters.initParameters()
 	# inherited parameters from the PathItem
 	for parameter in path.parameters:
-		if not result.parameters.safeAdd(parameter, sane):
-			error "fatal!"
+		var badadd = result.parameters.safeAdd(parameter, sane)
+		if badadd.isSome:
+			error badadd.get()
 	# parameters for this particular http method
 	if "parameters" in js:
 		for parameter in root.readParameters(js["parameters"]):
@@ -1173,8 +1172,9 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 					error $parameter & " provided but path `" & $path & "` invalid"
 				if parameter.name notin parsed.variables:
 					error $parameter & " provided but not in path `" & $path & "`"
-			if not result.parameters.safeAdd(parameter, sane):
-				error "fatal!"
+			var badadd = result.parameters.safeAdd(parameter, sane)
+			if badadd.isSome:
+				error badadd.get()
 
 	result.ast = newStmtList()
 	result.ast.add result.makeProcWithNamedArguments(sane, root)
