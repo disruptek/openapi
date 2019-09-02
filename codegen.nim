@@ -1489,15 +1489,18 @@ macro openapi*(inputfn: static[string]; outputfn: static[string]=""; body: typed
 	let content = staticRead(`inputfn`)
 	var consumed = content.consume()
 	if consumed.ok == false:
-		error "openapi: unable to parse " & `inputfn`
+		error "unable to parse " & `inputfn`
 		return
 	result = consumed.ast
+	if body != nil:
+		result.add body
 
 	if `outputfn` == "":
-		hint "openapi: (provide a filename to save API source)"
+		hint "provide filename.nim to save Nim source"
+	elif not `outputfn`.endsWith(".nim"):
+		hint "i'm afraid to overwrite " & `outputfn`
 	else:
-		hint "openapi: writing output to " & `outputfn`
+		hint "writing " & `outputfn`
 		writeFile(`outputfn`, result.repr)
-		result = quote do:
-			import `outputfn`
-			`body`
+		result = newNimNode(nnkImportStmt)
+		result.add newStrLitNode(outputfn)
