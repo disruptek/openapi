@@ -1203,11 +1203,16 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 				result.parameters.add parameter
 
 	result.ast = newStmtList()
-	let namedArgs = result.makeProcWithNamedArguments(sane, root)
+	let
+		namedArgs = result.makeProcWithNamedArguments(sane, root)
+		locations = result.makeProcWithLocationInputs(sane, root)
 	if namedArgs.isSome:
 		result.ast.add namedArgs.get()
-	result.ast.add result.makeProcWithLocationInputs(sane, root)
-	result.ok = true
+	if locations == nil:
+		warning "unable to compose `" & sane & "`"
+	else:
+		result.ast.add locations
+		result.ok = true
 
 proc newPathItem(root: JsonNode; path: string; input: JsonNode): PathItem =
 	## create a PathItem result for a parsed node
