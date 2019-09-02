@@ -968,7 +968,8 @@ proc documentation(p: Parameter; root: JsonNode): NimNode =
 		docs &= p.description
 	result = newCommentStmtNode(docs)
 
-proc sectionParameter(param: Parameter; root: JsonNode; section: NimNode; default: NimNode = nil): NimNode =
+proc sectionParameter(param: Parameter; kind: JsonNodeKind; section: NimNode; default: NimNode = nil): NimNode =
+	## pluck value out of location input, validate it, store it in section ident
 	result = newStmtList([])
 	var
 		name = param.name
@@ -976,31 +977,30 @@ proc sectionParameter(param: Parameter; root: JsonNode; section: NimNode; defaul
 		locIdent = newIdentNode($param.location)
 		validIdent = genSym(ident="valid")
 		defNode = if default == nil: newNilLit() else: default
-		jsKind = param.jsonKind(root)
-	assert jsKind.isSome, "fatal failure to infer type for parameter " & $param
-	var
-		kindIdent = newIdentNode($jsKind.get())
+		kindIdent = newIdentNode($kind)
 	# you might think `locIdent`.getOrDefault() would be a good place to simply
 	# instantiate our default JsonNode, but the validateParameter() is a more
 	# central place to validate/log both the input and the default value,
 	# particularly since we aren't going to unwrap the 'body' parameter
+
+	# "there can be one 'body' parameter at most."
 	if param.location == InBody:
 		result.add quote do:
-			var `validIdent` = `locIdent`
+			`section` = validateParameter(`locIdent`, `kindIdent`,
+				required= `reqIdent`, default= `defNode`)
 	else:
 		result.add quote do:
 			var `validIdent` = `locIdent`.getOrDefault(`name`)
-	result.add quote do:
-		`validIdent` = validateParameter(`validIdent`, `kindIdent`,
-			required= `reqIdent`, default= `defNode`)
-		if `validIdent` != nil:
-			`section`.add `name`, `validIdent`
+			`validIdent` = validateParameter(`validIdent`, `kindIdent`,
+				required= `reqIdent`, default= `defNode`)
+			if `validIdent` != nil:
+				`section`.add `name`, `validIdent`
 
 proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): NimNode =
 	let
 		opIdent = newExportedIdentNode("prepare" & name.capitalizeAscii)
 		inputsIdent = newIdentNode("result")
-		section = genSym(ident="section")
+		section = newIdentNode("section")
 	var
 		pragmas = newNimNode(nnkPragma)
 		opBody = newStmtList()
@@ -1015,8 +1015,7 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
 
 	if op.parameters.len > 0:
 		opBody.add quote do:
-			var
-				`section`: JsonNode
+			var `section`: JsonNode
 
 	opBody.add quote do:
 		`inputsIdent` = newJObject()
@@ -1032,20 +1031,37 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
 			opBody.add param.documentation(root)
 		opJsParams.add locIdent.toJsonParameter(false)
 
-		opBody.add quote do:
-			`section` = newJObject()
+		# the body IS the section, so don't bother creating a JObject for it
+		if location != InBody:
+			opBody.add quote do:
+				`section` = newJObject()
+
 		for param in op.parameters.forLocation(location):
-			let default = op.defaultNode(param, root)
+			var
+				default = op.defaultNode(param, root)
+				jsKind = param.jsonKind(root)
+			if jsKind.isNone:
+				warning "failure to infer type for parameter " & $param
+				return
 			if not required:
 				required = required or param.required
 				if required:
-					let msg = loco & " argument is necessary due to required `" &
-						param.name & "` field"
+					var msg = loco & " argument is necessary"
+					if location != InBody:
+						msg &= " due to required `" & param.name & "` field"
 					opBody.add quote do:
 						assert `locIdent` != nil, `msg`
-			opBody.add param.sectionParameter(root, section, default=default)
-		opBody.add quote do:
-			`inputsIdent`.add `loco`, `section`
+			opBody.add param.sectionParameter(jsKind.get(), section, default=default)
+
+		if location == InBody:
+			# don't attempt to save a nil body to the result
+			opBody.add quote do:
+				if `section` != nil:
+					`inputsIdent`.add `loco`, `section`
+		else:
+			# if it's not a body, we don't need to check if it's nil
+			opBody.add quote do:
+				`inputsIdent`.add `loco`, `section`
 
 	if pragmas.len > 0:
 		result = newProc(opIdent, opJsParams, opBody, pragmas = pragmas)
