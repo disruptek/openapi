@@ -1170,7 +1170,8 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 	for parameter in path.parameters:
 		var badadd = result.parameters.safeAdd(parameter, sane)
 		if badadd.isSome:
-			error badadd.get()
+			warning badadd.get()
+			result.parameters.add parameter
 	# parameters for this particular http method
 	if "parameters" in js:
 		for parameter in root.readParameters(js["parameters"]):
@@ -1182,7 +1183,8 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 					error $parameter & " provided but not in path `" & $path & "`"
 			var badadd = result.parameters.safeAdd(parameter, sane)
 			if badadd.isSome:
-				error badadd.get()
+				warning badadd.get()
+				result.parameters.add parameter
 
 	result.ast = newStmtList()
 	let namedArgs = result.makeProcWithNamedArguments(sane, root)
