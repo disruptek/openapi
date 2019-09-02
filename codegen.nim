@@ -60,7 +60,6 @@ type
 		operationId*: string
 		parameters*: Parameters
 		responses*: seq[Response]
-		# TODO: support this natively
 		deprecated*: bool
 
 	TypeDefResult* = object of ConsumeResult
@@ -70,7 +69,6 @@ type
 		wrapped: WrappedItem
 
 	GuessTypeResult = tuple
-		ok: bool
 		major: JsonNodeKind
 		minor: string
 
@@ -506,7 +504,7 @@ proc whine(input: JsonNode; why: string) =
 	## merely complain about an irregular input
 	warning why & ":\n" & input.pretty
 
-proc guessType(js: JsonNode; root: JsonNode): GuessTypeResult =
+proc guessType(js: JsonNode; root: JsonNode): Option[GuessTypeResult] =
 	## guess the JsonNodeKind of a node/schema, perhaps dereferencing
 	var
 		major: string
@@ -542,15 +540,15 @@ proc guessType(js: JsonNode; root: JsonNode): GuessTypeResult =
 			else:
 				# we'll return if we cannot recognize the type
 				warning "no type discovered:\n" & input.pretty
-				return (ok: false, major: JNull, minor: "")
+				return some((major: JNull, minor: ""))
 		assert major != "", "logic error; ie. someone forgot to add logic"
 		let
 			format = input.getOrDefault("format").getStr
 			kind = major.guessJsonNodeKind()
 		if kind.isSome:
-			result = (ok: true, major: kind.get(), minor: format)
+			result = some((major: kind.get(), minor: format))
 	else:
-		result = (ok: true, major: input.kind, minor: "")
+		result = some((major: input.kind, minor: ""))
 
 proc rightHandType(ftype: FieldTypeDef; js: JsonNode; name="?"): TypeDefResult =
 	## produce the right-hand side of a typedef given a json schema
@@ -589,11 +587,12 @@ proc rightHandType(ftype: FieldTypeDef; js: JsonNode; name="?"): TypeDefResult =
 			seq[`member`]
 	of Complex:
 		let k = input.guessType(root=nil) # no root here!
-		if not k.ok:
+		if k.isNone:
 			result.fail "unable to guess type of schema"
 			return
+		let (major, minor) = k.get()
 		# do we need to define an object type here?
-		if k.major == JObject:
+		if k.get().major == JObject:
 			# name this object type and add the definition
 			result.ast = input.defineObjectOrMap()
 
@@ -603,7 +602,7 @@ proc rightHandType(ftype: FieldTypeDef; js: JsonNode; name="?"): TypeDefResult =
 		else:
 			# it's not an object; just figure out what it is and def it
 			# create a new fieldtype, perhaps permuted by the format
-			result.ftype = k.major.conjugateFieldType(format=k.minor)
+			result.ftype = major.conjugateFieldType(format=minor)
 			let
 				# pass the same input through, for comment reasons
 				rh = result.ftype.rightHandType(input, name=name)
@@ -664,8 +663,8 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Typ
 proc jsonKind(param: Parameter; root: JsonNode): Option[JsonNodeKind] =
 	## determine the type of a parameter
 	let kind = param.source.guessType(root)
-	if kind.ok:
-		result = some(kind.major)
+	if kind.isSome:
+		result = some(kind.get().major)
 	else:
 		warning "unable to guess type:\n" & param.js.pretty
 
