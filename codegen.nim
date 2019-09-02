@@ -955,7 +955,12 @@ proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
 
 proc documentation(p: Parameter; root: JsonNode): NimNode =
 	var
-		docs = "  " & p.name & ": " & $p.jsonKind(root).get()
+		docs = "  " & p.name & ": "
+		kind = p.jsonKind(root)
+	if kind.isNone:
+		docs &= "{unknown type}"
+	else:
+		docs &= $kind.get()
 	if p.required:
 		docs &= " (required)"
 	if p.description != "":
