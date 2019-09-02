@@ -87,6 +87,31 @@ type
 		of Complex:
 			complex: WrappedField
 
+proc isKeyword(identifier: string): bool =
+	## true if the given identifier is a nim keyword
+	result = identifier in [
+		"addr", "and", "as", "asm",
+		"bind", "block", "break", "block", "break",
+		"case", "cast", "concept", "const", "continue", "converter",
+		"defer", "discard", "distinct", "div", "do",
+		"elif", "else", "end", "enum", "except", "export",
+		"finally", "for", "from", "func",
+		"if", "import", "in", "include", "interface", "is", "isnot", "iterator",
+		"let",
+		"macro", "method", "mixin", "mod",
+		"nil", "not", "notin",
+		"object", "of", "or", "out",
+		"proc", "ptr",
+		"raise", "ref", "return",
+		"shl", "shr", "static",
+		"template", "try", "tuple", "type",
+		"using",
+		"var",
+		"when", "while",
+		"xor",
+		"yield",
+	]
+
 proc validNimIdentifier(s: string): bool =
 	## true for strings that are valid identifier names
 	if s.len > 0 and s[0] in IdentStartChars:
@@ -120,12 +145,20 @@ proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): Typ
 proc parseTypeDef(input: JsonNode): FieldTypeDef
 proc parseTypeDefOrRef(input: JsonNode): NimNode
 
+proc stropIfNecessary(name: string): NimNode =
+	## backtick an identifier if it represents a keyword
+	if name.isKeyword:
+		result = newNimNode(nnkAccQuoted)
+		result.add newIdentNode(name)
+	else:
+		result = newIdentNode(name)
+
 proc newExportedIdentNode(name: string): NimNode =
 	## newIdentNode with an export annotation
 	assert name.validNimIdentifier == true
 	result = newNimNode(nnkPostfix)
 	result.add newIdentNode("*")
-	result.add newIdentNode(name)
+	result.add name.stropIfNecessary
 
 proc isValidIdentifier(name: string): bool =
 	## verify that the identifier has a reasonable name
@@ -142,7 +175,7 @@ proc toValidIdentifier(name: string; star=true): NimNode =
 		if star:
 			result = newExportedIdentNode(name)
 		else:
-			result = newIdentNode(name)
+			result = name.stropIfNecessary
 	else:
 		result = toValidIdentifier("oa" & name.replace("__", "_"), star=star)
 
@@ -995,6 +1028,14 @@ proc sectionParameter(param: Parameter; kind: JsonNodeKind; section: NimNode; de
 			if `validIdent` != nil:
 				`section`.add `name`, `validIdent`
 
+proc maybeAddExternalDocs(node: var NimNode; js: JsonNode) =
+	if js == nil or "externalDocs" notin js:
+		return
+	for field in ["description", "url"]:
+		var comment = js["externalDocs"].pluckString(field)
+		if comment.isSome:
+			node.add newCommentStmtNode(comment.get())
+
 proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): NimNode =
 	let
 		opIdent = newExportedIdentNode("prepare" & name.capitalizeAscii)
@@ -1011,6 +1052,7 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
 	# add documentation if available
 	if op.description != "":
 		opBody.add newCommentStmtNode(op.description & "\n")
+	opBody.maybeAddExternalDocs(op.js)
 
 	if op.parameters.len > 0:
 		opBody.add quote do:
@@ -1082,22 +1124,23 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Op
 	# add documentation if available
 	if op.description != "":
 		opBody.add newCommentStmtNode(op.description & "\n")
+	opBody.maybeAddExternalDocs(op.js)
 
 	# add required params first,
 	for param in op.parameters:
-		var
-			sane = param.saneName
-			saneIdent = newIdentNode(sane)
 		opBody.add param.documentation(root)
 		if param.required:
+			var
+				sane = param.saneName
+				saneIdent = sane.stropIfNecessary
 			opJsParams.add saneIdent.toJsonParameter(param.required)
 
 	# then add optional params
 	for param in op.parameters:
-		var
-			sane = param.saneName
-			saneIdent = newIdentNode(sane)
 		if not param.required:
+			var
+				sane = param.saneName
+				saneIdent = sane.stropIfNecessary
 			opJsParams.add saneIdent.toJsonParameter(param.required)
 
 	let inputsIdent = newIdentNode("result")
@@ -1112,7 +1155,7 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Op
 		var
 			insane = param.name
 			sane = param.saneName
-			saneIdent = newIdentNode(sane)
+			saneIdent = sane.stropIfNecessary
 			reqIdent = newIdentNode($param.required)
 			default = op.defaultNode(param, root)
 			errmsg: string
@@ -1369,6 +1412,7 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
 			
 		result.ast = newStmtList []
 		result.ast.add newCommentStmtNode(result.js.renderPreface)
+		result.ast.maybeAddExternalDocs(result.js)
 		result.ast.add imports
 
 		# deprecated
