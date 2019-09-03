@@ -1,5 +1,8 @@
+import macros
+import options
 import json
 import tables
+import strutils
 
 when not defined(release):
   import strformat
@@ -40,6 +43,16 @@ type
     Options = "options"
     Head = "head"
     Patch = "patch"
+
+  ConsumeResult* = object of RootObj
+    ok*: bool
+    schema*: Schema
+    js*: JsonNode
+    ast*: NimNode
+
+  GuessTypeResult = tuple
+    major: JsonNodeKind
+    minor: string
 
 proc `$`*(ftype: FieldTypeDef): string =
   if ftype == nil:
@@ -184,3 +197,218 @@ proc anything*(s: set[JsonNodeKind]): FieldTypeDef =
   ## any type, even null; defaults to optional
   assert s == {}
   result = Anything.newFieldTypeDef(required=false)
+
+proc pluckString*(input: JsonNode; key: string): Option[string] =
+  ## a robust getter for string values in json
+  if input == nil:
+    return
+  if input.kind != JObject:
+    return
+  if key notin input:
+    return
+  result = some(input[key].getStr)
+
+proc pluckRefJson*(root: JsonNode; input: JsonNode): JsonNode =
+  ## find and return the content of a json ref, if possible
+  let target = input.pluckString("$ref")
+  if target.isNone:
+    return
+  if root == nil:
+    warning "unable to retrieve $ref in this context"
+    return
+  var paths = target.get().split("/")
+  while paths.len > 0 and paths[0] in ["", "#"]:
+    paths = paths[1..^1]
+  result = root
+  for p in paths:
+    if p notin result:
+      warning "schema reference `" & target.get() & "` not found"
+      return nil
+    result = result[p]
+
+proc whine(input: JsonNode; why: string) =
+  ## merely complain about an irregular input
+  warning why & ":\n" & input.pretty
+
+proc guessJsonNodeKind*(name: string): Option[JsonNodeKind] =
+  ## map openapi type names to their json node types
+  case name:
+  of "integer": result = some(JInt)
+  of "number": result = some(JFloat)
+  of "string": result = some(JString)
+  of "file": result = some(JString)
+  of "boolean": result = some(JBool)
+  of "array": result = some(JArray)
+  of "object": result = some(JObject)
+  of "null": result = some(JNull)
+  else: discard
+
+proc guessType*(js: JsonNode; root: JsonNode): Option[GuessTypeResult] =
+  ## guess the JsonNodeKind of a node/schema, perhaps dereferencing
+  var
+    major: string
+    input = root.pluckRefJson(js)
+  if input == nil:
+    input = js
+
+  case input.kind:
+  of JObject:
+    # see if it's an untyped value
+    if input.len == 0:
+      # this is a map like {}
+      major = "object"
+    elif "type" in input:
+      major = input["type"].getStr
+    elif "schema" in input:
+      return input["schema"].guessType(root)
+    else:
+      # whine about any issues
+      if "properties" in input:
+        input.whine "objects should have a type=object property"
+        major = "object"
+      elif "additionalProperties" in input:
+        input.whine "maps should have a type=object property"
+        major = "object"
+      elif "allOf" in input:
+        input.whine "allOf is poorly implemented"
+        major = "object"
+        assert input["allOf"].kind == JArray
+        for n in input["allOf"]:
+          input = n
+          break
+      else:
+        # we'll return if we cannot recognize the type
+        warning "no type discovered:\n" & input.pretty
+        return some((major: JNull, minor: ""))
+    assert major != "", "logic error; ie. someone forgot to add logic"
+    let
+      format = input.getOrDefault("format").getStr
+      kind = major.guessJsonNodeKind()
+    if kind.isSome:
+      result = some((major: kind.get(), minor: format))
+  else:
+    result = some((major: input.kind, minor: ""))
+
+proc isKnownFormat(major: JsonNodeKind; format=""): bool =
+  ## it is known (and appropriate to the major)
+  case major:
+  of JInt:
+    result = case format:
+    of "", "integer", "int32", "long", "int64": true
+    else: false
+  of JFloat:
+    result = case format:
+    of "", "number", "float", "double": true
+    else: false
+  of JString:
+    result = case format:
+    of "", "string", "password", "file": true
+    of "byte", "binary": true
+    of "date", "date-time": true
+    else: false
+  of JBool:
+    result = case format:
+    of "", "boolean": true
+    else: false
+  of JArray:
+    result = case format:
+    of "", "array": true
+    else: false
+  of JObject:
+    result = case format:
+    of "", "object": true
+    else: false
+  of JNull:
+    result = case format:
+    of "", "null": true
+    else: false
+
+proc conjugateFieldType*(major: JsonNodeKind; format=""): FieldTypeDef =
+  ## makes a typedef given node kind and optional format;
+  ## (this should someday handle arbitrary formats)
+  if not major.isKnownFormat(format):
+    warning $major & " type has unknown format `" & format & "`"
+  result = major.toFieldTypeDef
+
+converter toNimNode*(ftype: FieldTypeDef): NimNode =
+  ## render a fieldtypedef as nimnode
+  if ftype == nil:
+    return newCommentStmtNode("fieldtypedef was nil")
+  case ftype.kind:
+  of Primitive:
+    if ftype.kinds.card == 0:
+      return newCommentStmtNode("missing type specification")
+    if ftype.kinds.card != 1:
+      return newCommentStmtNode("multiple types is too many")
+    for kind in ftype.kinds:
+      return case kind:
+      of JInt: newIdentNode("int")
+      of JFloat: newIdentNode("float")
+      of JString: newIdentNode("string")
+      of JBool: newIdentNode("bool")
+      of JNull: newNimNode(nnkNilLit)
+      else:
+        newCommentStmtNode("you can't create a Primitive from " & $kind)
+  of List:
+    assert ftype.member != nil
+    let elements = ftype.member.toNimNode
+    result = quote do:
+      seq[`elements`]
+  of Complex:
+    result = newCommentStmtNode("creating a " & $ftype.kind)
+    result.strVal.warning result
+  else:
+    result = newCommentStmtNode("you can't create a typedef for a " & $ftype.kind)
+    result.strVal.error result
+
+proc isKeyword*(identifier: string): bool =
+  ## true if the given identifier is a nim keyword
+  result = identifier in [
+    "addr", "and", "as", "asm",
+    "bind", "block", "break", "block", "break",
+    "case", "cast", "concept", "const", "continue", "converter",
+    "defer", "discard", "distinct", "div", "do",
+    "elif", "else", "end", "enum", "except", "export",
+    "finally", "for", "from", "func",
+    "if", "import", "in", "include", "interface", "is", "isnot", "iterator",
+    "let",
+    "macro", "method", "mixin", "mod",
+    "nil", "not", "notin",
+    "object", "of", "or", "out",
+    "proc", "ptr",
+    "raise", "ref", "return",
+    "shl", "shr", "static",
+    "template", "try", "tuple", "type",
+    "using",
+    "var",
+    "when", "while",
+    "xor",
+    "yield",
+  ]
+
+proc isValidNimIdentifier*(s: string): bool =
+  ## true for strings that are valid identifier names
+  if s.len > 0 and s[0] in IdentStartChars:
+    if s.len > 1 and '_' in [s[0], s[^1]]:
+      return false
+    for i in 1..s.len-1:
+      if s[i] notin IdentChars:
+        return false
+      if s[i] == '_' and s[i-1] == '_':
+        return false
+    return true
+
+proc stropIfNecessary*(name: string): NimNode =
+  ## backtick an identifier if it represents a keyword
+  if name.isKeyword:
+    result = newNimNode(nnkAccQuoted)
+    result.add newIdentNode(name)
+  else:
+    result = newIdentNode(name)
+
+proc newExportedIdentNode*(name: string): NimNode =
+  ## newIdentNode with an export annotation
+  assert name.isValidNimIdentifier == true
+  result = newNimNode(nnkPostfix)
+  result.add newIdentNode("*")
+  result.add name.stropIfNecessary
