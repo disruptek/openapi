@@ -9,7 +9,6 @@ import strtabs
 import spec
 import parser
 import paths
-import wrapped
 
 from schema2 import OpenApi2
 
@@ -36,6 +35,7 @@ type
     location*: ParameterIn
     default*: JsonNode
     source*: JsonNode
+    kind*: Option[GuessTypeResult]
 
   Parameters = object
     sane: StringTableRef
@@ -55,14 +55,6 @@ type
     responses*: seq[Response]
     deprecated*: bool
 
-proc jsonKind(param: Parameter; root: JsonNode): Option[JsonNodeKind] =
-  ## determine the type of a parameter
-  let kind = param.source.guessType(root)
-  if kind.isSome:
-    result = some(kind.get().major)
-  else:
-    warning "unable to guess type:\n" & param.js.pretty
-
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   ## instantiate a new parameter from a JsonNode schema
   assert input != nil and input.kind == JObject, "bizarre input: " &
@@ -74,7 +66,10 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
     js = input
   elif documentation.isNone:
     documentation = js.pluckString("description")
-  result = Parameter(ok: false, js: js)
+  var kind = js.guessType(root)
+  if kind.isNone:
+    error "unable to guess type:\n" & js.pretty
+  result = Parameter(ok: false, kind: kind, js: js)
   result.name = js["name"].getStr
   result.location = parseEnum[ParameterIn](js["in"].getStr)
   result.required = js.getOrDefault("required").getBool
@@ -324,17 +319,16 @@ proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
   var useDefault = false
   if param.default != nil:
     let
-      jsKind = param.jsonKind(root)
       sane = param.saneName
-    if jsKind.isNone:
+    if param.kind.isNone:
       warning "unable to parse default value for parameter `" & sane &
       "`:\n" & param.js.pretty
-    elif jsKind.get() == param.default.kind:
+    elif param.kind.get().major == param.default.kind:
       useDefault = true
     else:
       # provide a warning if the default type doesn't match the input
       warning "`" & sane & "` parameter in `" & $op &
-        "` is " & $jsKind & " but the default is " &
+        "` is " & $param.kind.get().major & " but the default is " &
         param.default.shortRepr & "; omitting code to supply the default"
 
   if useDefault:
@@ -351,11 +345,10 @@ proc documentation(p: Parameter; root: JsonNode): NimNode =
   ## document the given parameter
   var
     docs = "  " & p.name & ": "
-    kind = p.jsonKind(root)
-  if kind.isNone:
+  if p.kind.isNone:
     docs &= "{unknown type}"
   else:
-    docs &= $kind.get()
+    docs &= $p.kind.get().major
   if p.required:
     docs &= " (required)"
   if p.description != "":
@@ -445,8 +438,7 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
     for param in op.parameters.forLocation(location):
       var
         default = op.defaultNode(param, root)
-        jsKind = param.jsonKind(root)
-      if jsKind.isNone:
+      if param.kind.isNone:
         warning "failure to infer type for parameter " & $param
         return
       if not required:
@@ -457,7 +449,7 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
             msg &= " due to required `" & param.name & "` field"
           opBody.add quote do:
             assert `locIdent` != nil, `msg`
-      opBody.add param.sectionParameter(jsKind.get(), section, default=default)
+      opBody.add param.sectionParameter(param.kind.get().major, section, default=default)
 
     if location == InBody:
       # don't attempt to save a nil body to the result
@@ -525,13 +517,12 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Op
       reqIdent = newIdentNode($param.required)
       default = op.defaultNode(param, root)
       errmsg: string
-      jsKind = param.jsonKind(root)
-    if jsKind.isNone:
+    if param.kind.isNone:
       warning "failure to infer type for parameter " & $param
       return
     var
-      kindIdent = newIdentNode($jsKind.get())
-    errmsg = "expected " & $jsKind & " for `" & sane & "` but received "
+      kindIdent = newIdentNode($param.kind.get().major)
+    errmsg = "expected " & $param.kind.get().major & " for `" & sane & "` but received "
     for clash in op.parameters.nameClashes(param):
       warning "identifier clash in proc arguments: " & $clash.location &
         "-`" & clash.name & "` versus " & $param.location & "-`" &

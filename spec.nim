@@ -50,7 +50,7 @@ type
     js*: JsonNode
     ast*: NimNode
 
-  GuessTypeResult = tuple
+  GuessTypeResult* = tuple
     major: JsonNodeKind
     minor: string
 
