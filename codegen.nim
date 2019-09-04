@@ -20,6 +20,7 @@ type
     host*: string
     operations*: Table[string, Operation]
     parameters*: Parameters
+    roottype*: NimNode
 
   ParameterIn = enum
     InQuery = "query"
@@ -54,6 +55,8 @@ type
     parameters*: Parameters
     responses*: seq[Response]
     deprecated*: bool
+    typename*: NimNode
+    prepname*: NimNode
 
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   ## instantiate a new parameter from a JsonNode schema
@@ -103,6 +106,7 @@ template cappableAdd(s: var string; c: char) =
 
 proc sanitizeIdentifier(name: string; capsOkay=false): Option[string] =
   ## convert any string to a valid nim identifier in camel_Case
+  const elideUnder = true
   var id = ""
   if name.len == 0:
     return
@@ -116,8 +120,9 @@ proc sanitizeIdentifier(name: string; capsOkay=false): Option[string] =
       continue
     # help differentiate words case-insensitively
     id.add '_'
-  while "__" in id:
-    id = id.replace("__", "_")
+  when not elideUnder:
+    while "__" in id:
+      id = id.replace("__", "_")
   if id.len > 1:
     id.removeSuffix {'_'}
     id.removePrefix {'_'}
@@ -132,6 +137,10 @@ proc sanitizeIdentifier(name: string; capsOkay=false): Option[string] =
   if id[0] notin IdentStartChars:
     warning "identifiers cannot start with `" & id[0] & "`"
     return
+  when elideUnder:
+    if id.len > 1:
+      while "_" in id:
+        id = id.replace("_", "")
   if not id.isValidNimIdentifier:
     warning "bad identifier: " & id
     return
@@ -341,10 +350,11 @@ proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
   else:
     result = newNilLit()
 
-proc documentation(p: Parameter; root: JsonNode): NimNode =
+proc documentation(p: Parameter; root: JsonNode; name=""): NimNode =
   ## document the given parameter
   var
-    docs = "  " & p.name & ": "
+    label = if name == "": p.name else: name
+    docs = "  " & label & ": "
   if p.kind.isNone:
     docs &= "{unknown type}"
   else:
@@ -352,7 +362,7 @@ proc documentation(p: Parameter; root: JsonNode): NimNode =
   if p.required:
     docs &= " (required)"
   if p.description != "":
-    docs &= "\n" & spaces(2 + p.name.len) & ": "
+    docs &= "\n" & spaces(2 + label.len) & ": "
     docs &= p.description
   result = newCommentStmtNode(docs)
 
@@ -393,46 +403,58 @@ proc maybeAddExternalDocs(node: var NimNode; js: JsonNode) =
     if comment.isSome:
       node.add newCommentStmtNode(comment.get())
 
-proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): NimNode =
+proc maybeDeprecate(name: NimNode; params: seq[NimNode]; body: NimNode;
+                    deprecate: bool): NimNode =
+  ## make a proc and maybe deprecate it
+  if deprecate:
+    var pragmas = newNimNode(nnkPragma)
+    pragmas.add newIdentNode("deprecated")
+    result = newProc(name, params, body, pragmas = pragmas)
+  else:
+    result = newProc(name, params, body)
+
+proc locationParamDefs(op: Operation): seq[NimNode] =
+  ## produce a list of name/value parameters for each location
+  result = @[newIdentNode("JsonNode")]
+  for location in ParameterIn.low..ParameterIn.high:
+    var locIdent = newIdentNode($location)
+    # we require all locations for signature reasons
+    result.add locIdent.toJsonParameter(required=false)
+
+proc makeProcWithLocationInputs(op: Operation; name: NimNode; root: JsonNode): Option[NimNode] =
   ## create a proc to validate and compose inputs for a given call
   let
-    opIdent = newExportedIdentNode("prepare" & name.capitalizeAscii)
-    inputsIdent = newIdentNode("result")
+    output = newIdentNode("result")
     section = newIdentNode("section")
   var
-    pragmas = newNimNode(nnkPragma)
-    opBody = newStmtList()
-    opJsParams: seq[NimNode] = @[newIdentNode("JsonNode")]
-
-  if op.deprecated:
-    pragmas.add newIdentNode("deprecated")
+    body = newStmtList()
 
   # add documentation if available
   if op.description != "":
-    opBody.add newCommentStmtNode(op.description & "\n")
-  opBody.maybeAddExternalDocs(op.js)
+    body.add newCommentStmtNode(op.description & "\n")
+  body.maybeAddExternalDocs(op.js)
 
-  if op.parameters.len > 0:
-    opBody.add quote do:
-      var `section`: JsonNode
+  # all of these procs need all sections for consistency
+  body.add quote do:
+    var `section`: JsonNode
 
-  opBody.add quote do:
-    `inputsIdent` = newJObject()
+  body.add quote do:
+    `output` = newJObject()
 
-  for location in op.parameters.forms:
+  for location in ParameterIn.low..ParameterIn.high:
     var
       required: bool
       loco = $location
       locIdent = newIdentNode(loco)
     required = false
-    opBody.add newCommentStmtNode("parameters in `" & loco & "` object:")
+    if location in op.parameters.forms:
+      body.add newCommentStmtNode("parameters in `" & loco & "` object:")
     for param in op.parameters.forLocation(location):
-      opBody.add param.documentation(root)
-    opJsParams.add locIdent.toJsonParameter(false)
+      body.add param.documentation(root)
 
     # the body IS the section, so don't bother creating a JObject for it
     if location != InBody:
-      opBody.add quote do:
+      body.add quote do:
         `section` = newJObject()
 
     for param in op.parameters.forLocation(location):
@@ -447,65 +469,64 @@ proc makeProcWithLocationInputs(op: Operation; name: string; root: JsonNode): Ni
           var msg = loco & " argument is necessary"
           if location != InBody:
             msg &= " due to required `" & param.name & "` field"
-          opBody.add quote do:
+          body.add quote do:
             assert `locIdent` != nil, `msg`
-      opBody.add param.sectionParameter(param.kind.get().major, section, default=default)
+      body.add param.sectionParameter(param.kind.get().major, section, default=default)
 
     if location == InBody:
       # don't attempt to save a nil body to the result
-      opBody.add quote do:
+      body.add quote do:
         if `section` != nil:
-          `inputsIdent`.add `loco`, `section`
+          `output`.add `loco`, `section`
     else:
       # if it's not a body, we don't need to check if it's nil
-      opBody.add quote do:
-        `inputsIdent`.add `loco`, `section`
+      body.add quote do:
+        `output`.add `loco`, `section`
 
-  if pragmas.len > 0:
-    result = newProc(opIdent, opJsParams, opBody, pragmas = pragmas)
-  else:
-    result = newProc(opIdent, opJsParams, opBody)
+  let params = op.locationParamDefs
+  result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
-proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Option[NimNode] =
-  ## create a proc to validate and compose inputs for a given call
-  let
-    opIdent = newExportedIdentNode(name)
-    validIdent = newIdentNode("valid")
-  var
-    pragmas = newNimNode(nnkPragma)
-    opBody = newStmtList()
-    opJsParams: seq[NimNode] = @[newIdentNode("JsonNode")]
-
-  if op.deprecated:
-    pragmas.add newIdentNode("deprecated")
-
-  # add documentation if available
-  if op.description != "":
-    opBody.add newCommentStmtNode(op.description & "\n")
-  opBody.maybeAddExternalDocs(op.js)
-
+proc namedParamDefs(op: Operation): seq[NimNode] =
+  ## produce a list of name/value parameters per each operation input
   # add required params first,
   for param in op.parameters:
-    opBody.add param.documentation(root)
     if param.required:
       var
         sane = param.saneName
         saneIdent = sane.stropIfNecessary
-      opJsParams.add saneIdent.toJsonParameter(param.required)
-
+      result.add saneIdent.toJsonParameter(param.required)
   # then add optional params
   for param in op.parameters:
     if not param.required:
       var
         sane = param.saneName
         saneIdent = sane.stropIfNecessary
-      opJsParams.add saneIdent.toJsonParameter(param.required)
+      result.add saneIdent.toJsonParameter(param.required)
+
+proc makeProcWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
+  ## create a proc to validate and compose inputs for a given call
+  let
+    name = newExportedIdentNode("call")
+    validIdent = newIdentNode("valid")
+    callName = genSym(ident="call")
+  var
+    body = newStmtList()
+
+  # add documentation if available
+  body.add newCommentStmtNode(op.saneName)
+  if op.description != "":
+    body.add newCommentStmtNode(op.description)
+  body.maybeAddExternalDocs(op.js)
+
+  # document the parameters
+  for param in op.parameters:
+    body.add param.documentation(root, name=param.saneName)
 
   let inputsIdent = newIdentNode("result")
   if op.parameters.len > 0:
-    opBody.add quote do:
+    body.add quote do:
       var `validIdent`: JsonNode
-  opBody.add quote do:
+  body.add quote do:
     `inputsIdent` = newJObject()
 
   # assert proper parameter types and/or set defaults
@@ -528,21 +549,46 @@ proc makeProcWithNamedArguments(op: Operation; name: string; root: JsonNode): Op
         "-`" & clash.name & "` versus " & $param.location & "-`" &
         param.name & "`"
       return
-    opBody.add quote do:
+    body.add quote do:
       `validIdent` = validateParameter(`saneIdent`, `kindIdent`,
         required=`reqIdent`, default=`default`)
     if param.required:
-      opBody.add quote do:
+      body.add quote do:
         `inputsIdent`.add(`insane`, `validIdent`)
     else:
-      opBody.add quote do:
+      body.add quote do:
         if `validIdent` != nil:
           `inputsIdent`.add(`insane`, `validIdent`)
 
-  if pragmas.len > 0:
-    result = some(newProc(opIdent, opJsParams, opBody, pragmas = pragmas))
-  else:
-    result = some(newProc(opIdent, opJsParams, opBody))
+  var
+    params = @[newIdentNode("JsonNode")]
+  params.add newIdentDefs(callName, callType)
+  params &= op.namedParamDefs
+  result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
+
+proc makeCallType(path: PathItem; op: Operation): NimNode =
+  let
+    saneType = op.typename
+    oac = path.roottype
+  result = quote do:
+    type
+      `saneType` = ref object of `oac`
+
+proc makeCall(path: PathItem; op: Operation): NimNode =
+  ## produce an instantiated call object for export
+  let
+    sane = op.saneName
+    meth = $op.meth
+    methId = newIdentNode("HttpMethod.Http" & meth.capitalizeAscii)
+    saneCall = newExportedIdentNode(sane)
+    saneType = op.typename
+    validId = op.prepname
+    host = path.host
+    route = path.basePath & path.path
+
+  result = quote do:
+    var `saneCall` = `saneType`(name: `sane`, meth: `methId`, host: `host`,
+                                path: `route`, validator: `validId`)
 
 proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
   ## create a new operation for a given http method on a given path
@@ -572,6 +618,8 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
       warning "invented operation name `" & sane & "`"
       result.operationId = sane
   let sane = result.saneName
+  result.typename = genSym(ident="Call_" & sane.capitalizeAscii)
+  result.prepname = genSym(ident="validate_" & sane.capitalizeAscii)
   if "responses" in js:
     for status, resp in js["responses"].pairs:
       response = root.newResponse(status, resp)
@@ -602,22 +650,31 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
         result.parameters.add parameter
 
   result.ast = newStmtList()
-  let
-    namedArgs = result.makeProcWithNamedArguments(sane, root)
-    locations = result.makeProcWithLocationInputs(sane, root)
+
+  # start with the call type
+  result.ast.add path.makeCallType(result)
+
+  # if we don't have locations, we cannot support the operation at all
+  let locations = result.makeProcWithLocationInputs(result.prepname, root)
+  if locations.isNone:
+    warning "unable to compose `" & sane & "`"
+    return
+  result.ast.add locations.get()
+
+  # we use the call type to make our call() operation with named args
+  let namedArgs = result.makeProcWithNamedArguments(result.typename, root)
   if namedArgs.isSome:
     result.ast.add namedArgs.get()
-  if locations == nil:
-    warning "unable to compose `" & sane & "`"
-  else:
-    result.ast.add locations
-    result.ok = true
 
-proc newPathItem(root: JsonNode; path: string; input: JsonNode): PathItem =
+  # finally, add the call variable that the user hooks to
+  result.ast.add path.makeCall(result)
+  result.ok = true
+
+proc newPathItem(root: JsonNode; oac: NimNode; path: string; input: JsonNode): PathItem =
   ## create a PathItem result for a parsed node
   var
     op: Operation
-  result = PathItem(ok: false, path: path, js: input)
+  result = PathItem(ok: false, roottype: oac, path: path, js: input)
   if root != nil and root.kind == JObject and "basePath" in root:
     if root["basePath"].kind == JString:
       result.basePath = root["basePath"].getStr
@@ -646,7 +703,7 @@ proc newPathItem(root: JsonNode; path: string; input: JsonNode): PathItem =
     result.operations[$opName] = op
   result.ok = true
 
-iterator paths(root: JsonNode; ftype: FieldTypeDef): PathItem =
+iterator paths(root: JsonNode; oac: NimNode; ftype: FieldTypeDef): PathItem =
   ## yield path items found in the given node
   var
     schema: Schema
@@ -685,7 +742,7 @@ iterator paths(root: JsonNode; ftype: FieldTypeDef): PathItem =
         if not k.toLower.startsWith("x-"):
           warning "unrecognized path: " & k
         continue
-      yield root.newPathItem(k, v)
+      yield root.newPathItem(oac, k, v)
     break
 
 proc prefixedPluck(js: JsonNode; field: string; indent=0): string =
@@ -711,6 +768,71 @@ proc renderPreface(js: JsonNode): string =
       result &= info.prefixedPluck(field)
     result &= info.getOrDefault("license").renderLicense
     result &= "\n" & info.pluckString("description").get("") & "\n"
+
+proc preamble(oac: NimNode): NimNode =
+  ## code common to all apis
+  result = newStmtList([])
+
+  # imports
+  var imports = newNimNode(nnkImportStmt)
+  for module in ["json", "openapi/rest"]:
+    imports.add newIdentNode(module)
+  result.add imports
+
+  # exports
+  when false:
+    var exports = newNimNode(nnkExportStmt)
+    exports.add newIdentNode("rest")
+    result.add exports
+
+  let
+    jsP = newIdentNode("js")
+    kindP = newIdentNode("kind")
+    requiredP = newIdentNode("required")
+    defaultP = newIdentNode("default")
+    queryP = newIdentNode("query")
+    bodyP = newIdentNode("body")
+    pathP = newIdentNode("path")
+    headerP = newIdentNode("header")
+    formP = newIdentNode("formData")
+    vsP = newIdentNode("ValidatorSignature")
+    tP = newIdentNode("t")
+    createP = newIdentNode("clone")
+    T = newIdentNode("T")
+    dollP = newIdentNode("`$`")
+
+  result.add quote do:
+    type
+      `vsP` = proc (`queryP`: JsonNode = nil; `bodyP`: JsonNode = nil;
+         `headerP`: JsonNode = nil; `pathP`: JsonNode = nil;
+         `formP`: JsonNode = nil): JsonNode
+      `oac` = ref object of RestCall
+        validator*: `vsP`
+        path*: string
+        host*: string
+
+    proc `dollP`*(`bodyP`: `oac`): string = rest.`dollP`(`bodyP`)
+
+    proc `createP`*[`T`: `oac`](`tP`: `T`): `T` =
+      result = T(name: `tP`.name, meth: `tP`.meth, host: `tP`.host,
+                 path: `tP`.path, validator: `tP`.validator)
+
+    proc validateParameter(`jsP`: JsonNode; `kindP`: JsonNodeKind;
+      `requiredP`: bool; `defaultP`: JsonNode = nil): JsonNode =
+      ## ensure an input is of the correct json type and yield
+      ## a suitable default value when appropriate
+      if `jsP` == nil:
+        if `defaultP` != nil:
+          return validateParameter(`defaultP`, `kindP`,
+            required=`requiredP`)
+      result = `jsP`
+      if result == nil:
+        assert not `requiredP`, $`kindP` & " expected; received nil"
+        if `requiredP`:
+          result = newJNull()
+      else:
+        assert `jsP`.kind == `kindP`,
+          $`kindP` & " expected; received " & $`jsP`.kind
 
 proc consume(content: string): ConsumeResult {.compileTime.} =
   ## parse a string which might hold an openapi definition
@@ -750,15 +872,13 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
     if not pr.ok:
       break
 
-    # add some imports we'll want
-    # FIXME: make sure we need tables before importing it
-    let imports = quote do:
-      import json
-
     result.ast = newStmtList []
     result.ast.add newCommentStmtNode(result.js.renderPreface)
     result.ast.maybeAddExternalDocs(result.js)
-    result.ast.add imports
+
+    # add common code
+    let oac = genSym(ident="OpenApiRestCall")
+    result.ast.add preamble(oac)
 
     # deprecated
     when false:
@@ -798,37 +918,15 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
             warning "unable to make typedef for " & k
           result.ast.add typeSection
 
-    let
-      jsP = newIdentNode("js")
-      kindP = newIdentNode("kind")
-      requiredP = newIdentNode("required")
-      defaultP = newIdentNode("default")
-    result.ast.add quote do:
-      proc validateParameter(`jsP`: JsonNode; `kindP`: JsonNodeKind;
-        `requiredP`: bool; `defaultP`: JsonNode = nil): JsonNode =
-        ## ensure an input is of the correct json type and yield
-        ## a suitable default value when appropriate
-        if `jsP` == nil:
-          if `defaultP` != nil:
-            return validateParameter(`defaultP`, `kindP`,
-              required=`requiredP`)
-        result = `jsP`
-        if result == nil:
-          assert not `requiredP`, $`kindP` & " expected; received nil"
-          if `requiredP`:
-            result = newJNull()
-        else:
-          assert `jsP`.kind == `kindP`,
-            $`kindP` & " expected; received " & $`jsP`.kind
-
-    for path in result.js.paths(result.schema):
+    # add whatever we can for each operation
+    for path in result.js.paths(oac, result.schema):
       for meth, op in path.operations.pairs:
         result.ast.add op.ast
 
     result.ok = true
     break
 
-macro openapi*(inputfn: static[string]; outputfn: static[string]=""; body: typed): untyped =
+macro openapi*(inputfn: static[string]; outputfn: static[string]=""; body: untyped): untyped =
   ## parse input json filename and output nim target library
   # TODO: this should get renamed to openApiClient to make room for openApiServer
   let content = staticRead(`inputfn`)
@@ -846,6 +944,6 @@ macro openapi*(inputfn: static[string]; outputfn: static[string]=""; body: typed
     hint "i'm afraid to overwrite " & `outputfn`
   else:
     hint "writing " & `outputfn`
-    writeFile(`outputfn`, result.repr)
+    writeFile(outputfn, result.repr)
     result = newNimNode(nnkImportStmt)
     result.add newStrLitNode(outputfn)
