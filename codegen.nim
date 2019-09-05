@@ -415,13 +415,44 @@ proc maybeDeprecate(name: NimNode; params: seq[NimNode]; body: NimNode;
 
 proc locationParamDefs(op: Operation): seq[NimNode] =
   ## produce a list of name/value parameters for each location
-  result = @[newIdentNode("JsonNode")]
   for location in ParameterIn.low..ParameterIn.high:
     var locIdent = newIdentNode($location)
     # we require all locations for signature reasons
     result.add locIdent.toJsonParameter(required=false)
 
-proc makeProcWithLocationInputs(op: Operation; name: NimNode; root: JsonNode): Option[NimNode] =
+proc makeProcWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
+  ## a call that gets passed JsonNodes for each parameter section
+  let
+    name = newExportedIdentNode("call")
+    validIdent = newIdentNode("valid")
+    callName = genSym(ident="call")
+    output = newIdentNode("result")
+  var
+    validatorParams: seq[NimNode]
+    validatorProc = newDotExpr(callName, newIdentNode("validator"))
+    body = newStmtList()
+
+  # add documentation if available
+  if op.description != "":
+    body.add newCommentStmtNode(op.description & "\n")
+  body.maybeAddExternalDocs(op.js)
+
+  body.add quote do:
+    var `validIdent`: JsonNode
+
+  for location in ParameterIn.low..ParameterIn.high:
+    validatorParams.add newIdentNode($location)
+
+  var validatorCall = validatorProc.newCall(validatorParams)
+  body.add newAssignment(validIdent, validatorCall)
+  body.add newAssignment(output, validIdent)
+
+  var params = @[newIdentNode("JsonNode")]
+  params.add newIdentDefs(callName, callType)
+  params &= op.locationParamDefs
+  result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
+
+proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode] =
   ## create a proc to validate and compose inputs for a given call
   let
     output = newIdentNode("result")
@@ -483,7 +514,9 @@ proc makeProcWithLocationInputs(op: Operation; name: NimNode; root: JsonNode): O
       body.add quote do:
         `output`.add `loco`, `section`
 
-  let params = op.locationParamDefs
+  var params = @[newIdentNode("JsonNode")]
+  #params.add newIdentDefs(callName, callType)
+  params &= op.locationParamDefs
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
 proc namedParamDefs(op: Operation): seq[NimNode] =
@@ -654,10 +687,17 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   # start with the call type
   result.ast.add path.makeCallType(result)
 
+  # if we don't have a validator, we cannot support the operation at all
+  let validator = result.makeValidator(result.prepname, root)
+  if validator.isNone:
+    warning "unable to compose validator for `" & sane & "`"
+    return
+  result.ast.add validator.get()
+
   # if we don't have locations, we cannot support the operation at all
-  let locations = result.makeProcWithLocationInputs(result.prepname, root)
+  let locations = result.makeProcWithLocationInputs(result.typename, root)
   if locations.isNone:
-    warning "unable to compose `" & sane & "`"
+    warning "unable to compose call for `" & sane & "`"
     return
   result.ast.add locations.get()
 
