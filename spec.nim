@@ -415,3 +415,48 @@ proc newExportedIdentNode*(name: string): NimNode =
   result = newNimNode(nnkPostfix)
   result.add newIdentNode("*")
   result.add name.stropIfNecessary
+
+proc getLiteral*(node: JsonNode = nil): NimNode =
+  ## produce literal nim of the given json type, perhaps with a value
+  assert node != nil
+  result = case node.kind:
+  of JString:
+    newStrLitNode(node.getStr)
+  of JBool:
+    newIdentNode($node.getBool)
+  of JInt:
+    newIntLitNode(node.getInt)
+  of JFloat:
+    newFloatLitNode(node.getFloat)
+  of JNull:
+    newNilLit()
+  else:
+    raise newException(ValueError,
+                       "unable to get a literal from a " & $node.kind)
+
+proc getLiteral*(kind: JsonNodeKind): NimNode =
+  ## produce literal nim of the given json type, perhaps with a value
+  result = case kind:
+  of JString:
+    newStrLitNode("")
+  of JBool:
+    newIdentNode("false")
+  of JInt:
+    newIntLitNode(0)
+  of JFloat:
+    newFloatLitNode(0.0)
+  of JNull:
+    newNilLit()
+  else:
+    raise newException(ValueError,
+                       "unable to get a literal from a " & $kind)
+
+proc instantiateWithDefault*(kind: JsonNodeKind; default: NimNode): NimNode =
+  assert default != nil, "nil defaults aren't supported yet"
+  if kind in {JString, JInt, JBool, JFloat}:
+    result = newCall(newIdentNode("new" & $kind), default)
+  elif kind == JNull:
+    result = newCall(newIdentNode("new" & $kind))
+  else:
+    raise newException(ValueError,
+                       "unable to instantiate new " & $kind & " node (yet)")
