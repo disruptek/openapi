@@ -540,9 +540,10 @@ proc makeProcWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
   ## create a proc to validate and compose inputs for a given call
   let
     name = newExportedIdentNode("call")
-    validIdent = newIdentNode("valid")
     callName = genSym(ident="call")
   var
+    validatorParams: seq[NimNode]
+    validatorProc = newDotExpr(callName, newIdentNode("validator"))
     body = newStmtList()
 
   # add documentation if available
@@ -555,12 +556,18 @@ proc makeProcWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
   for param in op.parameters:
     body.add param.documentation(root, name=param.saneName)
 
-  let inputsIdent = newIdentNode("result")
-  if op.parameters.len > 0:
-    body.add quote do:
-      var `validIdent`: JsonNode
-  body.add quote do:
-    `inputsIdent` = newJObject()
+  let output = newIdentNode("result")
+
+  for location in ParameterIn.low..ParameterIn.high:
+    block found:
+      for param in op.parameters.forLocation(location):
+        var section = newIdentNode($location)
+        validatorParams.add section
+        body.add quote do:
+          var `section` = newJObject()
+        break found
+      validatorParams.add newNilLit()
+  var validatorCall = validatorProc.newCall(validatorParams)
 
   # assert proper parameter types and/or set defaults
   for param in op.parameters:
@@ -568,14 +575,12 @@ proc makeProcWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
       insane = param.name
       sane = param.saneName
       saneIdent = sane.stropIfNecessary
-      reqIdent = newIdentNode($param.required)
-      default = op.defaultNode(param, root)
+      section = newIdentNode($param.location)
+      #sectionadd = newDotExpr(section, newIdentNode("add"))
       errmsg: string
     if param.kind.isNone:
       warning "failure to infer type for parameter " & $param
       return
-    var
-      kindIdent = newIdentNode($param.kind.get().major)
     errmsg = "expected " & $param.kind.get().major & " for `" & sane & "` but received "
     for clash in op.parameters.nameClashes(param):
       warning "identifier clash in proc arguments: " & $clash.location &
@@ -583,15 +588,9 @@ proc makeProcWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
         param.name & "`"
       return
     body.add quote do:
-      `validIdent` = validateParameter(`saneIdent`, `kindIdent`,
-        required=`reqIdent`, default=`default`)
-    if param.required:
-      body.add quote do:
-        `inputsIdent`.add(`insane`, `validIdent`)
-    else:
-      body.add quote do:
-        if `validIdent` != nil:
-          `inputsIdent`.add(`insane`, `validIdent`)
+      if `saneIdent` != nil:
+        `section`.add `insane`, `saneIdent`
+  body.add newAssignment(output, validatorCall)
 
   var
     params = @[newIdentNode("JsonNode")]
