@@ -280,15 +280,21 @@ proc toJsonParameter(name: NimNode; required: bool): NimNode =
   else:
     result = newIdentDefs(name, ident"JsonNode", newNilLit())
 
+proc shortRepr(js: JsonNode): string =
+  ## render a JInt(3) as "JInt(3)"; will puke on arrays/objects/null
+  assert js.kind in {JNull, JBool, JInt, JFloat, JString}
+  result = $js.kind & "(" & $js & ")"
+
 proc toNativeParameter(name: NimNode; kind: JsonNodeKind; required: bool; default: JsonNode = nil): NimNode =
   ## create the right-hand side of a native typedef for the given parameter
   if required:
-    result = newIdentDefs(name, kind.toNimNode)
-  elif default != nil:
-    assert default.kind == kind
-    result = newIdentDefs(name, kind.toNimNode, default.getLiteral)
-  else:
-    result = newIdentDefs(name, kind.toNimNode, kind.getLiteral)
+    return newIdentDefs(name, kind.toNimNode)
+  if default != nil:
+    if default.kind == kind:
+      return newIdentDefs(name, kind.toNimNode, default.getLiteral)
+    warning $kind & " parameter `" & $name & "` has default of " &
+      default.shortRepr & "; omitting code to supply the default"
+  result = newIdentDefs(name, kind.toNimNode, kind.getLiteral)
 
 proc toNewJsonNimNode(js: JsonNode): NimNode =
   ## take a JsonNode value and produce Nim that instantiates it
@@ -331,11 +337,6 @@ proc toNewJsonNimNode(js: JsonNode): NimNode =
     result = newBlockStmt(c)
   else:
     raise newException(ValueError, "unsupported input: " & $js.kind)
-
-proc shortRepr(js: JsonNode): string =
-  ## render a JInt(3) as "JInt(3)"; will puke on arrays/objects/null
-  assert js.kind in {JNull, JBool, JInt, JFloat, JString}
-  result = $js.kind & "(" & $js & ")"
 
 proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
   ## generate nim to instantiate the default value for the parameter
