@@ -13,7 +13,7 @@ import paths
 from schema2 import OpenApi2
 
 type
-  PathItem* = object of ConsumeResult
+  PathItem = object of ConsumeResult
     path*: string
     parsed*: ParserResult
     basePath*: string
@@ -28,6 +28,8 @@ type
     InHeader = "header"
     InPath = "path"
     InData = "formData"
+
+  DocType = enum Json, Native
 
   Parameter = object of ConsumeResult
     name*: string
@@ -278,6 +280,16 @@ proc toJsonParameter(name: NimNode; required: bool): NimNode =
   else:
     result = newIdentDefs(name, ident"JsonNode", newNilLit())
 
+proc toNativeParameter(name: NimNode; kind: JsonNodeKind; required: bool; default: JsonNode = nil): NimNode =
+  ## create the right-hand side of a native typedef for the given parameter
+  if required:
+    result = newIdentDefs(name, kind.toNimNode)
+  elif default != nil:
+    assert default.kind == kind
+    result = newIdentDefs(name, kind.toNimNode, default.getLiteral)
+  else:
+    result = newIdentDefs(name, kind.toNimNode, kind.getLiteral)
+
 proc toNewJsonNimNode(js: JsonNode): NimNode =
   ## take a JsonNode value and produce Nim that instantiates it
   case js.kind:
@@ -322,6 +334,7 @@ proc toNewJsonNimNode(js: JsonNode): NimNode =
 
 proc shortRepr(js: JsonNode): string =
   ## render a JInt(3) as "JInt(3)"; will puke on arrays/objects/null
+  assert js.kind in {JNull, JBool, JInt, JFloat, JString}
   result = $js.kind & "(" & $js & ")"
 
 proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
@@ -351,7 +364,7 @@ proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
   else:
     result = newNilLit()
 
-proc documentation(p: Parameter; root: JsonNode; name=""): NimNode =
+proc documentation(p: Parameter; form: DocType; root: JsonNode; name=""): NimNode =
   ## document the given parameter
   var
     label = if name == "": p.name else: name
@@ -359,7 +372,11 @@ proc documentation(p: Parameter; root: JsonNode; name=""): NimNode =
   if p.kind.isNone:
     docs &= "{unknown type}"
   else:
-    docs &= $p.kind.get().major
+    case form:
+    of Json:
+      docs &= $p.kind.get().major
+    of Native:
+      docs &= $p.kind.get().major.toNimNode
   if p.required:
     docs &= " (required)"
   if p.description != "":
@@ -443,7 +460,6 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
   ## make a proc that composes a url for the call given a json path object
   let
     name = op.urlname
-    output = ident"result"
     pathObj = ident"path"
     hydrated = ident"hydrated"
     hydrateProc = ident"hydratePath"
@@ -573,7 +589,7 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
     if location in op.parameters.forms:
       body.add newCommentStmtNode("parameters in `" & loco & "` object:")
     for param in op.parameters.forLocation(location):
-      body.add param.documentation(root)
+      body.add param.documentation(Json, root)
 
     # the body IS the section, so don't bother creating a JObject for it
     if location != InBody:
@@ -611,6 +627,10 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
   params &= op.locationParamDefs
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
+proc usesJsonWhenNative(param: Parameter): bool =
+  ## simple test to see if a parameter should use a json type
+  result = param.location == InBody or param.kind.get().major == JNull
+
 proc namedParamDefs(op: Operation): seq[NimNode] =
   ## produce a list of name/value parameters per each operation input
   # add required params first,
@@ -619,24 +639,39 @@ proc namedParamDefs(op: Operation): seq[NimNode] =
       var
         sane = param.saneName
         saneIdent = sane.stropIfNecessary
-      result.add saneIdent.toJsonParameter(param.required)
+        major = param.kind.get().major
+      if param.usesJsonWhenNative:
+        if major == JNull:
+          warning $param & " is a required JNull; we'll insert it later..."
+          continue
+        result.add saneIdent.toJsonParameter(param.required)
+      else:
+        result.add saneIdent.toNativeParameter(major, param.required,
+                                               default=param.default)
   # then add optional params
   for param in op.parameters:
     if not param.required:
       var
         sane = param.saneName
         saneIdent = sane.stropIfNecessary
-      result.add saneIdent.toJsonParameter(param.required)
+        major = param.kind.get().major
+      if param.usesJsonWhenNative:
+        result.add saneIdent.toJsonParameter(param.required)
+      else:
+        result.add saneIdent.toNativeParameter(major, param.required,
+                                               default=param.default)
 
 proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
   ## create a proc to validate and compose inputs for a given call
   let
     name = newExportedIdentNode("call")
     callName = genSym(ident="call")
+    output = ident"result"
   var
     validatorParams: seq[NimNode]
-    validatorProc = newDotExpr(callName, ident"validator")
+    sectionedProc = newDotExpr(callName, ident"call")
     body = newStmtList()
+    sections = newTable[ParameterIn, NimNode]()
 
   # add documentation if available
   body.add newCommentStmtNode(op.saneName)
@@ -646,20 +681,20 @@ proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
 
   # document the parameters
   for param in op.parameters:
-    body.add param.documentation(root, name=param.saneName)
-
-  let output = ident"result"
-
+    if param.usesJsonWhenNative:
+      body.add param.documentation(Json, root, name=param.saneName)
+    else:
+      body.add param.documentation(Native, root, name=param.saneName)
   for location in ParameterIn.low..ParameterIn.high:
     block found:
       for param in op.parameters.forLocation(location):
-        var section = newIdentNode($location)
+        var section = genSym(ident= $location)
+        sections[location] = section
         validatorParams.add section
-        body.add quote do:
-          var `section` = newJObject()
+        body.add newVarStmt(section, newCall(ident"newJObject"))
         break found
       validatorParams.add newNilLit()
-  var validatorCall = validatorProc.newCall(validatorParams)
+  var validatorCall = sectionedProc.newCall(validatorParams)
 
   # assert proper parameter types and/or set defaults
   for param in op.parameters:
@@ -667,7 +702,7 @@ proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
       insane = param.name
       sane = param.saneName
       saneIdent = sane.stropIfNecessary
-      section = newIdentNode($param.location)
+      section = sections[param.location]
       #sectionadd = newDotExpr(section, ident"add")
       errmsg: string
     if param.kind.isNone:
@@ -679,9 +714,19 @@ proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
         "-`" & clash.name & "` versus " & $param.location & "-`" &
         param.name & "`"
       return
-    body.add quote do:
-      if `saneIdent` != nil:
-        `section`.add `insane`, `saneIdent`
+    if param.usesJsonWhenNative:
+      if param.location == InBody:
+        body.add quote do:
+          if `saneIdent` != nil:
+            `section` = `saneIdent`
+      else:
+        body.add quote do:
+          if `saneIdent` != nil:
+            `section`.add `insane`, `saneIdent`
+    else:
+      var rhs = param.kind.get().major.instantiateWithDefault(saneIdent)
+      body.add newCall(ident"add", section, newStrLitNode(insane), rhs)
+
   body.add newAssignment(output, validatorCall)
 
   var
@@ -747,6 +792,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   let sane = result.saneName
   result.typename = genSym(ident="Call_" & sane.capitalizeAscii)
   result.prepname = genSym(ident="validate_" & sane.capitalizeAscii)
+  result.urlname = genSym(ident="url_" & sane.capitalizeAscii)
   if "responses" in js:
     for status, resp in js["responses"].pairs:
       response = root.newResponse(status, resp)
@@ -782,7 +828,6 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   result.ast.add path.makeCallType(result)
 
   # add a routine to convert a path object into a url
-  result.urlname = genSym(ident="url_" & sane)
   result.ast.add path.makeUrl(result)
 
   # if we don't have a validator, we cannot support the operation at all
@@ -1053,7 +1098,6 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
     let oac = genSym(ident="OpenApiRestCall")
     result.ast.add preamble(oac)
 
-    # deprecated
     when false:
       tree = newBranch[FieldTypeDef, WrappedItem](anything({}), "tree")
       tree["definitions"] = newBranch[FieldTypeDef, WrappedItem](anything({}), "definitions")
