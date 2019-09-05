@@ -615,8 +615,10 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
     if location == InBody:
       # don't attempt to save a nil body to the result
       body.add quote do:
-        if `section` != nil:
-          `output`.add `loco`, `section`
+        if `locIdent` != nil:
+          `output`.add `loco`, `locIdent`
+        else:
+          `output`.add `loco`, newJObject()
     else:
       # if it's not a body, we don't need to check if it's nil
       body.add quote do:
