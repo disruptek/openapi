@@ -631,7 +631,10 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
 
 proc usesJsonWhenNative(param: Parameter): bool =
   ## simple test to see if a parameter should use a json type
-  result = param.location == InBody or param.kind.get().major == JNull
+  if param.location == InBody:
+    result = true
+  elif param.kind.get().major notin {JBool, JInt, JFloat, JString}:
+    result = true
 
 proc namedParamDefs(op: Operation): seq[NimNode] =
   ## produce a list of name/value parameters per each operation input
