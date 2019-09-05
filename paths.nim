@@ -1,5 +1,6 @@
 import tables
 import strutils
+import sequtils
 
 import npeg
 
@@ -9,8 +10,6 @@ type
     kind: PathTokenKind
     value: string
   TemplateParse* = object
-    constants*: seq[string]
-    variables*: seq[string]
     segments*: seq[PathToken]
     path*: string
     ok*: bool
@@ -25,7 +24,19 @@ proc isTemplate*(path: string): bool =
     b = path.find('}')
   return a < b and a > -1
 
-proc parseTemplateInOrder*(path: string): TemplateParse =
+iterator variables*(parsed: TemplateParse): string =
+  for segment in parsed.segments:
+    if segment.kind != VariableSegment:
+      continue
+    yield segment.value
+
+iterator constants*(parsed: TemplateParse): string =
+  for segment in parsed.segments:
+    if segment.kind != ConstantSegment:
+      continue
+    yield segment.value
+
+proc parseTemplate*(path: string): TemplateParse =
   ## parse a path and pull out the variable names and constants
   if not path.isTemplate:
     return TemplateParse(ok: false, path: path)
@@ -44,32 +55,6 @@ proc parseTemplateInOrder*(path: string): TemplateParse =
   if not parsed.ok:
     return TemplateParse(ok: false, path: path)
   result.segments = segments
-
-proc parseTemplate*(path: string): TemplateParse =
-  ## parse a path and pull out the variable names and constants
-  if not path.isTemplate:
-    return TemplateParse(ok: false, path: path)
-  result = TemplateParse(ok: true, path: path)
-  let variables = peg "path":
-    noncurly <- Print - '{' - '}'
-    text <- +noncurly
-    variable <- '{' * >text * '}'
-    segment <- text | variable
-    path <- +segment
-  var parsed = variables.match(path)
-  if not parsed.ok:
-    return TemplateParse(ok: false, path: path)
-  result.variables = parsed.captures
-  let constants = peg "path":
-    noncurly <- Print - '{' - '}'
-    text <- +noncurly
-    variable <- '{' * text * '}'
-    segment <- >text | variable
-    path <- +segment
-  parsed = constants.match(path)
-  if not parsed.ok:
-    return TemplateParse(ok: false, path: path)
-  result.constants = parsed.captures
 
 proc headrest(list: seq[string]):
   tuple[head: string, tail: seq[string]] {.inline.} =
@@ -129,7 +114,10 @@ proc match*(source: string; path: string;
 
 proc match*(tp: TemplateParse; input: string): bool =
   ## unsatisfied path variables/constants are an error
-  result = tp.path.match(input, tp.constants, tp.variables)
+  var
+    constants = toSeq tp.constants
+    variables = toSeq tp.variables
+  result = tp.path.match(input, constants, variables)
 
 proc composePath*(path: string; variables: Table[string, string]): string =
   ## create a path with variable substitution per the template, variables

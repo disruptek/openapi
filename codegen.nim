@@ -480,7 +480,7 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
       result = `protocol` & "://" & `host` & `base` & `route`
   else:
     let
-      parsed = path.path.parseTemplateInOrder
+      parsed = path.path.parseTemplate
       segments = ident"segments"
     body.add quote do:
       assert `pathObj` != nil, "path is required to populate template"
@@ -816,12 +816,6 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   # parameters for this particular http method
   if "parameters" in js:
     for parameter in root.readParameters(js["parameters"]):
-      if parameter.location == InPath:
-        let parsed = parseTemplate(path.path)
-        if not parsed.ok:
-          error $parameter & " provided but path `" & $path & "` invalid"
-        if parameter.name notin parsed.variables:
-          error $parameter & " provided but not in path `" & $path & "`"
       var badadd = result.parameters.safeAdd(parameter, sane)
       if badadd.isSome:
         warning badadd.get()
