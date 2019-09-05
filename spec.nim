@@ -330,6 +330,16 @@ proc conjugateFieldType*(major: JsonNodeKind; format=""): FieldTypeDef =
     warning $major & " type has unknown format `" & format & "`"
   result = major.toFieldTypeDef
 
+converter toNimNode*(kind: JsonNodeKind): NimNode =
+  result = case kind:
+  of JInt: ident"int"
+  of JFloat: ident"float"
+  of JString: ident"string"
+  of JBool: ident"bool"
+  of JNull: newNilLit()
+  else:
+    raise newException(ValueError, "unable to cast " & $kind & " to Nim")
+
 converter toNimNode*(ftype: FieldTypeDef): NimNode =
   ## render a fieldtypedef as nimnode
   if ftype == nil:
@@ -341,14 +351,7 @@ converter toNimNode*(ftype: FieldTypeDef): NimNode =
     if ftype.kinds.card != 1:
       return newCommentStmtNode("multiple types is too many")
     for kind in ftype.kinds:
-      return case kind:
-      of JInt: newIdentNode("int")
-      of JFloat: newIdentNode("float")
-      of JString: newIdentNode("string")
-      of JBool: newIdentNode("bool")
-      of JNull: newNimNode(nnkNilLit)
-      else:
-        newCommentStmtNode("you can't create a Primitive from " & $kind)
+      return kind.toNimNode
   of List:
     assert ftype.member != nil
     let elements = ftype.member.toNimNode
