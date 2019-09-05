@@ -4,11 +4,19 @@ import strutils
 import npeg
 
 type
+  PathTokenKind* = enum ConstantSegment, VariableSegment
+  PathToken* = tuple
+    kind: PathTokenKind
+    value: string
   TemplateParse* = object
     constants*: seq[string]
     variables*: seq[string]
+    segments*: seq[PathToken]
     path*: string
     ok*: bool
+
+proc `$`*(segment: PathToken): string =
+  result = segment.value
 
 proc isTemplate*(path: string): bool =
   ## quickly test to see if the path might be templated
@@ -16,6 +24,26 @@ proc isTemplate*(path: string): bool =
     a = path.find('{')
     b = path.find('}')
   return a < b and a > -1
+
+proc parseTemplateInOrder*(path: string): TemplateParse =
+  ## parse a path and pull out the variable names and constants
+  if not path.isTemplate:
+    return TemplateParse(ok: false, path: path)
+  result = TemplateParse(ok: true, path: path)
+  var segments: seq[PathToken]
+  let destruct = peg "path":
+    noncurly <- Print - '{' - '}'
+    text <- +noncurly
+    variable <- '{' * >text * '}':
+      segments.add (kind: VariableSegment, value: $1)
+    segment <- >text | variable:
+      if capture.len > 0:
+        segments.add (kind: ConstantSegment, value: $1)
+    path <- +segment
+  var parsed = destruct.match(path)
+  if not parsed.ok:
+    return TemplateParse(ok: false, path: path)
+  result.segments = segments
 
 proc parseTemplate*(path: string): TemplateParse =
   ## parse a path and pull out the variable names and constants

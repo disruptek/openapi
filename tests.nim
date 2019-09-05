@@ -15,7 +15,7 @@ suite "paths":
     "{path}", "{mime type}",
     "/{path}", "/path/{path}",
     "/{foo}/{bar}", "{foo}/bif/{bar}",
-    "/one/{two}three",
+    "/one/{two}three", "/one/two{three}/four",
   ]
   let nottemplates = @[
     "{path", "}mime type{",
@@ -44,12 +44,34 @@ suite "paths":
       ("", "path"), ("", "mime type"),
       ("/", "path"), ("/path/", "path"),
       ("/,/", "foo,bar"), ("/bif/", "foo,bar"),
-      ("/one/,three", "two")
+      ("/one/,three", "two"), ("/one/two,/four", "three")
     ]
     for t in templates:
       var res = t.parseTemplate
       check res.ok == true
       results.add (c: res.constants.join(","), v: res.variables.join(","))
+    check results == should
+    for t in nottemplates:
+      var res = t.parseTemplate
+      check res.ok == false
+  test "parse a path template in order":
+    var results: seq[tuple[c: string; v: string]]
+    var should = @[
+      ("", "path"), ("", "mime type"),
+      ("/", "path"), ("/path/", "path"),
+      ("/,/", "foo,bar"), ("/bif/", "foo,bar"),
+      ("/one/,three", "two"), ("/one/two,/four", "three")
+    ]
+    for t in templates:
+      var res = t.parseTemplateInOrder
+      check res.ok == true
+      var constants, variables: seq[string]
+      for seg in res.segments:
+        if seg.kind == ConstantSegment:
+          constants.add $seg
+        else:
+          variables.add $seg
+      results.add (c: constants.join(","), v: variables.join(","))
     check results == should
     for t in nottemplates:
       var res = t.parseTemplate
