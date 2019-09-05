@@ -57,6 +57,7 @@ type
     deprecated*: bool
     typename*: NimNode
     prepname*: NimNode
+    urlname*: NimNode
 
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   ## instantiate a new parameter from a JsonNode schema
@@ -273,9 +274,9 @@ proc newResponse(root: JsonNode; status: string; input: JsonNode): Response =
 proc toJsonParameter(name: NimNode; required: bool): NimNode =
   ## create the right-hand side of a JsonNode typedef for the given parameter
   if required:
-    result = newIdentDefs(name, newIdentNode("JsonNode"))
+    result = newIdentDefs(name, ident"JsonNode")
   else:
-    result = newIdentDefs(name, newIdentNode("JsonNode"), newNilLit())
+    result = newIdentDefs(name, ident"JsonNode", newNilLit())
 
 proc toNewJsonNimNode(js: JsonNode): NimNode =
   ## take a JsonNode value and produce Nim that instantiates it
@@ -307,7 +308,7 @@ proc toNewJsonNimNode(js: JsonNode): NimNode =
         a.add j.toNewJsonNimNode
     var
       c = newStmtList()
-      i = newIdentNode("jarray")
+      i = ident"jarray"
     c.add quote do:
       var `i` = newJarray()
     for j in a:
@@ -408,10 +409,101 @@ proc maybeDeprecate(name: NimNode; params: seq[NimNode]; body: NimNode;
   ## make a proc and maybe deprecate it
   if deprecate:
     var pragmas = newNimNode(nnkPragma)
-    pragmas.add newIdentNode("deprecated")
+    pragmas.add ident"deprecated"
     result = newProc(name, params, body, pragmas = pragmas)
   else:
     result = newProc(name, params, body)
+
+proc get(parameters: Parameters; location: ParameterIn; name: string; mode: StringTableMode): Option[Parameter] =
+  ## get a parameter from a parameter list using location and string;
+  ## the mode parameter is identical to that for strtabs, allowing you to
+  ## specify the type of identifier comparison to use for detecting equality
+  var sane: string
+  if mode == modeStyleInsensitive:
+    let sanitized = name.sanitizeIdentifier
+    if sanitized.isSome:
+      sane = sanitized.get()
+    else:
+      warning "unable to sanitize parameter name `" & name & "`"
+      return
+  for param in parameters.forLocation(location):
+    case mode
+    of modeCaseSensitive:
+      if param.name == name:
+        return some(param)
+    of modeCaseInsensitive:
+      if param.name.toLowerAscii == name.toLowerAscii:
+        return some(param)
+    of modeStyleInsensitive:
+      var saneparam = param.name.sanitizeIdentifier
+      if saneparam.isSome and saneparam.get() == sane:
+        return some(param)
+
+proc makeUrl(path: PathItem; op: Operation): NimNode =
+  ## make a proc that composes a url for the call given a json path object
+  let
+    name = op.urlname
+    output = ident"result"
+    pathObj = ident"path"
+    hydrated = ident"hydrated"
+    hydrateProc = ident"hydratePath"
+    route = ident"route"
+    base = ident"base"
+    host = ident"host"
+    protocol = ident"protocol"
+    nillable = not op.path.isTemplate
+    bracket = newNimNode(nnkBracket)
+  var
+    body = newStmtList()
+
+  if nillable:
+    # the path doesn't take take any variables; warn if the schema does
+    for param in op.parameters.forLocation(InPath):
+      assert false, $op & " has param " & $param & " but path isn't a template"
+    body.add quote do:
+      result = `protocol` & "://" & `host` & `base` & `route`
+  else:
+    let
+      parsed = path.path.parseTemplateInOrder
+      segments = ident"segments"
+    body.add quote do:
+      assert `pathObj` != nil, "path is required to populate template"
+
+    # add some assertions
+    for segment in parsed.segments:
+      if segment.kind != VariableSegment:
+        continue
+      var
+        gotParam = op.parameters.get(InPath, $segment, modeStyleInsensitive)
+        varname = newStrLitNode($segment)
+        msg = newStrLitNode("`" & $segment & "` is a required path parameter")
+      if gotParam.isNone:
+        warning "path template references an unknown parameter `" & $segment & "`"
+        continue
+      body.add quote do:
+        assert `varname` in `pathObj`, `msg`
+
+    # construct a list of segments we'll use to hydrate the path
+    for segment in parsed.segments:
+      var par = newPar([newIdentNode($segment.kind),
+                        newStrLitNode(segment.value)])
+      bracket.add par
+    body.add newConstStmt(segments, bracket.prefix("@"))
+
+    # invoke the hydration and bomb if it failed
+    body.add newVarStmt(hydrated, newCall(hydrateProc, pathObj, segments))
+    body.add quote do:
+      if `hydrated`.isNone:
+        raise newException(ValueError, "unable to fully hydrate path")
+      result = `protocol` & "://" & `host` & `base` & `hydrated`.get()
+
+  var params = @[ident"string"]
+  params.add newIdentDefs(protocol, ident"string")
+  params.add newIdentDefs(host, ident"string")
+  params.add newIdentDefs(base, ident"string")
+  params.add newIdentDefs(route, ident"string")
+  params.add newIdentDefs(pathObj, ident"JsonNode")
+  result = newProc(name, params, body)
 
 proc locationParamDefs(op: Operation): seq[NimNode] =
   ## produce a list of name/value parameters for each location
@@ -420,16 +512,16 @@ proc locationParamDefs(op: Operation): seq[NimNode] =
     # we require all locations for signature reasons
     result.add locIdent.toJsonParameter(required=false)
 
-proc makeProcWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
+proc makeCallWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
   ## a call that gets passed JsonNodes for each parameter section
   let
     name = newExportedIdentNode("call")
-    validIdent = newIdentNode("valid")
+    validIdent = ident"valid"
     callName = genSym(ident="call")
-    output = newIdentNode("result")
+    output = ident"result"
   var
     validatorParams: seq[NimNode]
-    validatorProc = newDotExpr(callName, newIdentNode("validator"))
+    validatorProc = newDotExpr(callName, ident"validator")
     body = newStmtList()
 
   # add documentation if available
@@ -447,7 +539,7 @@ proc makeProcWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode
   body.add newAssignment(validIdent, validatorCall)
   body.add newAssignment(output, validIdent)
 
-  var params = @[newIdentNode("JsonNode")]
+  var params = @[ident"JsonNode"]
   params.add newIdentDefs(callName, callType)
   params &= op.locationParamDefs
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
@@ -455,8 +547,8 @@ proc makeProcWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode
 proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode] =
   ## create a proc to validate and compose inputs for a given call
   let
-    output = newIdentNode("result")
-    section = newIdentNode("section")
+    output = ident"result"
+    section = ident"section"
   var
     body = newStmtList()
 
@@ -514,7 +606,7 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
       body.add quote do:
         `output`.add `loco`, `section`
 
-  var params = @[newIdentNode("JsonNode")]
+  var params = @[ident"JsonNode"]
   #params.add newIdentDefs(callName, callType)
   params &= op.locationParamDefs
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
@@ -536,14 +628,14 @@ proc namedParamDefs(op: Operation): seq[NimNode] =
         saneIdent = sane.stropIfNecessary
       result.add saneIdent.toJsonParameter(param.required)
 
-proc makeProcWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
+proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
   ## create a proc to validate and compose inputs for a given call
   let
     name = newExportedIdentNode("call")
     callName = genSym(ident="call")
   var
     validatorParams: seq[NimNode]
-    validatorProc = newDotExpr(callName, newIdentNode("validator"))
+    validatorProc = newDotExpr(callName, ident"validator")
     body = newStmtList()
 
   # add documentation if available
@@ -556,7 +648,7 @@ proc makeProcWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
   for param in op.parameters:
     body.add param.documentation(root, name=param.saneName)
 
-  let output = newIdentNode("result")
+  let output = ident"result"
 
   for location in ParameterIn.low..ParameterIn.high:
     block found:
@@ -576,7 +668,7 @@ proc makeProcWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
       sane = param.saneName
       saneIdent = sane.stropIfNecessary
       section = newIdentNode($param.location)
-      #sectionadd = newDotExpr(section, newIdentNode("add"))
+      #sectionadd = newDotExpr(section, ident"add")
       errmsg: string
     if param.kind.isNone:
       warning "failure to infer type for parameter " & $param
@@ -593,7 +685,7 @@ proc makeProcWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
   body.add newAssignment(output, validatorCall)
 
   var
-    params = @[newIdentNode("JsonNode")]
+    params = @[ident"JsonNode"]
   params.add newIdentDefs(callName, callType)
   params &= op.namedParamDefs
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
@@ -606,7 +698,7 @@ proc makeCallType(path: PathItem; op: Operation): NimNode =
     type
       `saneType` = ref object of `oac`
 
-proc makeCall(path: PathItem; op: Operation): NimNode =
+proc makeCallVar(path: PathItem; op: Operation): NimNode =
   ## produce an instantiated call object for export
   let
     sane = op.saneName
@@ -615,12 +707,15 @@ proc makeCall(path: PathItem; op: Operation): NimNode =
     saneCall = newExportedIdentNode(sane)
     saneType = op.typename
     validId = op.prepname
+    urlId = op.urlname
+    base = path.basePath
     host = path.host
-    route = path.basePath & path.path
+    route = path.path
 
   result = quote do:
     var `saneCall` = `saneType`(name: `sane`, meth: `methId`, host: `host`,
-                                path: `route`, validator: `validId`)
+                                route: `route`, validator: `validId`,
+                                base: `base`, url: `urlId`)
 
 proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
   ## create a new operation for a given http method on a given path
@@ -686,6 +781,10 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   # start with the call type
   result.ast.add path.makeCallType(result)
 
+  # add a routine to convert a path object into a url
+  result.urlname = genSym(ident="url_" & sane)
+  result.ast.add path.makeUrl(result)
+
   # if we don't have a validator, we cannot support the operation at all
   let validator = result.makeValidator(result.prepname, root)
   if validator.isNone:
@@ -694,19 +793,19 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   result.ast.add validator.get()
 
   # if we don't have locations, we cannot support the operation at all
-  let locations = result.makeProcWithLocationInputs(result.typename, root)
+  let locations = result.makeCallWithLocationInputs(result.typename, root)
   if locations.isNone:
     warning "unable to compose call for `" & sane & "`"
     return
   result.ast.add locations.get()
 
   # we use the call type to make our call() operation with named args
-  let namedArgs = result.makeProcWithNamedArguments(result.typename, root)
+  let namedArgs = result.makeCallWithNamedArguments(result.typename, root)
   if namedArgs.isSome:
     result.ast.add namedArgs.get()
 
   # finally, add the call variable that the user hooks to
-  result.ast.add path.makeCall(result)
+  result.ast.add path.makeCallVar(result)
   result.ok = true
 
 proc newPathItem(root: JsonNode; oac: NimNode; path: string; input: JsonNode): PathItem =
@@ -814,31 +913,35 @@ proc preamble(oac: NimNode): NimNode =
 
   # imports
   var imports = newNimNode(nnkImportStmt)
-  for module in ["json", "openapi/rest"]:
+  for module in ["json", "options", "openapi/rest"]:
     imports.add newIdentNode(module)
   result.add imports
 
   # exports
   when false:
     var exports = newNimNode(nnkExportStmt)
-    exports.add newIdentNode("rest")
+    exports.add ident"rest"
     result.add exports
 
   let
-    jsP = newIdentNode("js")
-    kindP = newIdentNode("kind")
-    requiredP = newIdentNode("required")
-    defaultP = newIdentNode("default")
-    queryP = newIdentNode("query")
-    bodyP = newIdentNode("body")
-    pathP = newIdentNode("path")
-    headerP = newIdentNode("header")
-    formP = newIdentNode("formData")
-    vsP = newIdentNode("ValidatorSignature")
-    tP = newIdentNode("t")
-    createP = newIdentNode("clone")
-    T = newIdentNode("T")
-    dollP = newIdentNode("`$`")
+    jsP = ident"js"
+    kindP = ident"kind"
+    requiredP = ident"required"
+    defaultP = ident"default"
+    queryP = ident"query"
+    bodyP = ident"body"
+    pathP = ident"path"
+    headerP = ident"header"
+    formP = ident"formData"
+    vsP = ident"ValidatorSignature"
+    tP = ident"t"
+    createP = ident"clone"
+    T = ident"T"
+    dollP = ident"`$`"
+    protoP = ident"protocol"
+    hostP = ident"host"
+    baseP = ident"base"
+    routeP = ident"route"
 
   result.add quote do:
     type
@@ -847,8 +950,11 @@ proc preamble(oac: NimNode): NimNode =
          `formP`: JsonNode = nil): JsonNode
       `oac` = ref object of RestCall
         validator*: `vsP`
-        path*: string
+        route*: string
+        base*: string
         host*: string
+        url*: proc (`protoP`: string; `hostP`: string; `baseP`: string;
+                    `routeP`: string; `pathP`: JsonNode): string
 
     proc `dollP`*(`bodyP`: `oac`): string = rest.`dollP`(`bodyP`)
 
@@ -872,6 +978,34 @@ proc preamble(oac: NimNode): NimNode =
       else:
         assert `jsP`.kind == `kindP`,
           $`kindP` & " expected; received " & $`jsP`.kind
+
+  # i'm getting lazy
+  result.add parseStmt """
+type
+  PathTokenKind = enum ConstantSegment, VariableSegment
+  PathToken = tuple
+    kind: PathTokenKind
+    value: string
+proc hydratePath(input: JsonNode; segments: seq[PathToken]): Option[string] =
+  ## reconstitute a path with constants and variable values taken from json
+  var head: string
+  if segments.len == 0:
+    return some("")
+  head = segments[0].value
+  case segments[0].kind:
+  of ConstantSegment: discard
+  of VariableSegment:
+    if head notin input:
+      return
+    let js = input[head]
+    if js.kind notin {JString, JInt, JFloat, JNull, JBool}:
+      return
+    head = $js
+  var remainder = input.hydratePath(segments[1..^1])
+  if remainder.isNone:
+    return
+  result = some(head & remainder.get())
+    """
 
 proc consume(content: string): ConsumeResult {.compileTime.} =
   ## parse a string which might hold an openapi definition
