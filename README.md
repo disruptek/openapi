@@ -1,10 +1,5 @@
 # OpenAPI Code Generator for Nim
 
-## Some useful links
-- APIs we consume https://github.com/APIs-guru/openapi-directory/blob/master/APIs
-- Schema v2 https://swagger.io/specification/v2
-- Schema v3 https://swagger.io/specification (not yet supported)
-
 ## Example
 
 First, you need to convert your YAML swagger input into JSON:
@@ -60,3 +55,9 @@ Named arguments in native Nim types with default values if supported:
 proc call*(call_745069: Call_GetLotteryDraw_745063; game: string; count: int = 0): Recallable
 ```
 In any case, the inputs will be validated according to the API definition and only inputs which match parameters defined by the API will be sent to the server, and only if their types are correct.
+
+## Some useful links
+- APIs we consume https://github.com/APIs-guru/openapi-directory/blob/master/APIs
+- Schema v2 https://swagger.io/specification/v2
+- Schema v3 https://swagger.io/specification (not yet supported)
+
