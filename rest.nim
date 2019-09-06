@@ -10,7 +10,7 @@ import xmltree
 import logging
 import strutils
 
-export httpcore.HttpMethod
+export httpcore.HttpMethod, is2xx, is3xx, is4xx, is5xx
 
 type
   ResultFormat* = enum JSON, XML, RAW
@@ -146,20 +146,6 @@ proc issueRequest*(rec: Recallable): Future[AsyncResponse]
   except Exception as e:
     raise newException(AsyncError, e.msg)
 
-proc codeIn(response: Response | AsyncResponse; start: int; stop: int): bool
-  {.raises: [].} =
-  ## true if the response code is in the given range
-  try:
-    let code = ord(response.code)
-    return (start <= code and code < stop)
-  except:
-    return false
-
-template ok200*(response: Response | AsyncResponse): bool = response.codeIn(200, 300)
-template err300*(response: Response | AsyncResponse): bool = response.codeIn(300, 400)
-template err400*(response: Response | AsyncResponse): bool = response.codeIn(400, 500)
-template err500*(response: Response | AsyncResponse): bool = response.codeIn(500, 600)
-
 proc retried*(rec: Recallable; tries=5): AsyncResponse
   {.raises: [RestError].} =
   ## issue the call and return the response synchronously;
@@ -167,9 +153,9 @@ proc retried*(rec: Recallable; tries=5): AsyncResponse
   try:
     for fib in fibonacci(0, tries):
       result = waitfor rec.issueRequest()
-      if result.ok200:
+      if result.code.is2xx:
         return
-      if result.err400:
+      if result.code.is4xx:
         error waitfor result.body
         raise newException(CallRequestError, result.status)
       warn $result.status & "; sleeping " & $fib & " secs and retrying..."
@@ -191,9 +177,9 @@ proc retry*(rec: Recallable; tries=5): Future[AsyncResponse]
   try:
     for fib in fibonacci(0, tries):
       response = await rec.issueRequest()
-      if response.ok200:
+      if response.code.is2xx:
         return response
-      if response.err400:
+      if response.code.is4xx:
         raise newException(CallRequestError, response.status)
       warn $response.status & "; sleeping " & $fib & " secs and retrying..."
       await sleepAsync(fib * 1000)
@@ -217,7 +203,7 @@ iterator retried*(rec: Recallable; tries=5): AsyncResponse
     for fib in fibonacci(0, tries):
       response = waitfor rec.issueRequest()
       yield response
-      if response.err400:
+      if response.code.is4xx:
         raise newException(CallRequestError, response.status)
       warn $response.status & "; sleeping " & $fib & " secs and retrying..."
       sleep(fib * 1000)
@@ -240,7 +226,7 @@ proc errorFree*[T: RestCall](rec: Recallable; call: T; tries=5): Future[string]
     try:
       response = await rec.retry(tries=limit)
       rec.took = getTime() - rec.began
-      if not response.ok200:
+      if not response.code.is2xx:
         warn call & " failed after " & $rec.retries & " retries"
         limit -= rec.retries
         continue
@@ -317,14 +303,14 @@ when isMainModule:
 
     test "retried via procs":
       var response = rec.retried()
-      check response.ok200
+      check response.code.is2xx
       var text = waitfor response.body
       check text != ""
 
     test "retried via iteration":
       var text: string
       for response in rec.retried(tries=5):
-        if not response.ok200:
+        if not response.code.is2xx:
           warn "retried " & $rec.retries & " took " & $rec.took
           continue
         text = waitfor response.body
@@ -333,6 +319,6 @@ when isMainModule:
 
     test "async retry":
       var response = waitfor rec.retry()
-      check response.ok200
+      check response.code.is2xx
       var text = waitfor response.body
       check text != ""
