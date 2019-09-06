@@ -14,10 +14,10 @@ from schema2 import OpenApi2
 
 type
   Scheme {.pure.} = enum
-    Http = "http",
     Https = "https",
-    Ws = "ws",
+    Http = "http",
     Wss = "wss"
+    Ws = "ws",
 
   PathItem = object of ConsumeResult
     path*: string
@@ -57,7 +57,7 @@ type
 
   Operation = object of ConsumeResult
     meth*: HttpOpName
-    path*: string
+    path*: PathItem
     description*: string
     operationId*: string
     parameters*: Parameters
@@ -70,6 +70,15 @@ type
   Generator = object of ConsumeResult
     schemes: set[Scheme]
     roottype: NimNode
+
+converter toNimNode(scheme: Scheme): NimNode =
+  var s = $scheme
+  result = newDotExpr(ident"Scheme", newIdentNode(s.capitalizeAscii))
+
+converter toNimNode(schemes: set[Scheme]): NimNode =
+  result = newNimNode(nnkCurly)
+  for scheme in schemes:
+    result.add scheme.toNimNode
 
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   ## instantiate a new parameter from a JsonNode schema
@@ -173,7 +182,7 @@ proc saneName(op: Operation): string =
     attempt.add op.operationId
     attempt.add $op.meth & "_" & op.operationId
   # TODO: turn path /some/{var_name}/foo_bar into some_varName_fooBar?
-  attempt.add $op.meth & "_" & op.path
+  attempt.add $op.meth & "_" & op.path.path
   for name in attempt:
     var id = sanitizeIdentifier(name, capsOkay=false)
     if id.isSome:
@@ -200,9 +209,10 @@ proc hash(p: Parameter): Hash =
   result = p.location.hash !& p.name.hash
   result = !$result
 
-proc len(parameters: Parameters): int =
-  ## the number of items in the container
-  result = parameters.tab.len
+when false:
+  proc len(parameters: Parameters): int =
+    ## the number of items in the container
+    result = parameters.tab.len
 
 iterator items(parameters: Parameters): Parameter =
   ## helper for iterating over parameters
@@ -478,7 +488,7 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
     base = ident"base"
     host = ident"host"
     protocol = ident"protocol"
-    nillable = not op.path.isTemplate
+    nillable = not path.path.isTemplate
     bracket = newNimNode(nnkBracket)
   var
     body = newStmtList()
@@ -547,6 +557,7 @@ proc makeCallWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode
     callName = genSym(ident="call")
     output = ident"result"
   var
+    content: NimNode
     validatorParams: seq[NimNode]
     validatorProc = newDotExpr(callName, ident"validator")
     body = newStmtList()
@@ -556,32 +567,41 @@ proc makeCallWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode
     body.add newCommentStmtNode(op.description & "\n")
   body.maybeAddExternalDocs(op.js)
 
-  body.add quote do:
-    var `validIdent`: JsonNode
-
   for location in ParameterIn.low..ParameterIn.high:
     validatorParams.add newIdentNode($location)
 
   var validatorCall = validatorProc.newCall(validatorParams)
-  body.add newAssignment(validIdent, validatorCall)
-
-  when defined(ssl):
-    var proto = ident"Https"
-  else:
-    var proto = ident"Http"
-
+  body.add newLetStmt(validIdent, validatorCall)
   var
     urlProc = newDotExpr(callName, ident"url")
     urlHost = newDotExpr(callName, ident"host")
     urlBase = newDotExpr(callName, ident"base")
     urlRoute = newDotExpr(callName, ident"route")
-  body.add newVarStmt(ident"url", newCall(urlProc, proto, urlHost,
-                                          urlBase, urlRoute, ident"path"))
+    scheme = ident"scheme"
+    protocol = newDotExpr(scheme, ident"get")
+    path = newCall(newDotExpr(validIdent, ident"getOrDefault"),
+                   newStrLitNode("path"))
+  if InBody in op.parameters.forms:
+    content = newCall(newDotExpr(validIdent, ident"getOrDefault"),
+                                 newStrLitNode("body"))
+  else:
+    content = newNilLit()
+
+  body.add newLetStmt(scheme, newDotExpr(callName, ident"pickScheme"))
+  body.add quote do:
+    if `scheme`.isNone:
+      raise newException(IOError, "unable to find a supported scheme")
+  body.add newLetStmt(ident"url", newCall(urlProc, protocol, urlHost,
+                                          urlBase, urlRoute, path))
+  body.add newLetStmt(ident"headers", newCall(ident"massageHeaders",
+                                            newCall(newDotExpr(validIdent,
+                                                       ident"getOrDefault"),
+                                            newStrLitNode("header"))))
   body.add newAssignment(output, newCall(ident"newRecallable",
                                          callName,
                                          ident"url",
-                                         newCall(ident"massageHeaders",
-                                                 ident"header")))
+                                         ident"headers",
+                                         content))
 
   var params = @[ident"Recallable"]
   params.add newIdentDefs(callName, callType)
@@ -641,12 +661,10 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
       body.add param.sectionParameter(param.kind.get().major, section, default=default)
 
     if location == InBody:
-      # don't attempt to save a nil body to the result
+      # just leave the body out if it's undefined (as a signal)
       body.add quote do:
         if `locIdent` != nil:
           `output`.add `loco`, `locIdent`
-        else:
-          `output`.add `loco`, newJObject()
     else:
       # if it's not a body, we don't need to check if it's nil
       body.add quote do:
@@ -768,7 +786,7 @@ proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
   params &= op.namedParamDefs
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
-proc makeCallType(path: PathItem; op: Operation): NimNode =
+proc makeCallType(gen: Generator; path: PathItem; op: Operation): NimNode =
   let
     saneType = op.typename
     oac = path.generator.roottype
@@ -776,7 +794,7 @@ proc makeCallType(path: PathItem; op: Operation): NimNode =
     type
       `saneType` = ref object of `oac`
 
-proc makeCallVar(path: PathItem; op: Operation): NimNode =
+proc makeCallVar(gen: Generator; path: PathItem; op: Operation): NimNode =
   ## produce an instantiated call object for export
   let
     sane = op.saneName
@@ -789,11 +807,12 @@ proc makeCallVar(path: PathItem; op: Operation): NimNode =
     base = path.basePath
     host = path.host
     route = path.path
+    schemes = gen.schemes.toNimNode
 
   result = quote do:
     var `saneCall` = `saneType`(name: `sane`, meth: `methId`, host: `host`,
                                 route: `route`, validator: `validId`,
-                                base: `base`, url: `urlId`)
+                                base: `base`, url: `urlId`, schemes: `schemes`)
 
 proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
   ## create a new operation for a given http method on a given path
@@ -806,7 +825,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   # if the ref has a description, use that if needed
   elif documentation.isNone:
     documentation = input.pluckString("description")
-  result = Operation(ok: false, meth: meth, path: path.path, js: js)
+  result = Operation(ok: false, meth: meth, path: path, js: js)
   if documentation.isSome:
     result.description = documentation.get()
   result.operationId = js.getOrDefault("operationId").getStr
@@ -852,7 +871,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   result.ast = newStmtList()
 
   # start with the call type
-  result.ast.add path.makeCallType(result)
+  result.ast.add path.generator.makeCallType(path, result)
 
   # add a routine to convert a path object into a url
   result.ast.add path.makeUrl(result)
@@ -877,7 +896,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
     result.ast.add namedArgs.get()
 
   # finally, add the call variable that the user hooks to
-  result.ast.add path.makeCallVar(result)
+  result.ast.add path.generator.makeCallVar(path, result)
   result.ok = true
 
 proc newPathItem(gen: Generator; path: string; input: JsonNode): PathItem =
@@ -1015,15 +1034,16 @@ proc preamble(oac: NimNode): NimNode =
     hostP = ident"host"
     baseP = ident"base"
     routeP = ident"route"
-    schemeP = ident"Scheme"
+    SchemeP = ident"Scheme"
+    schemeP = ident"scheme"
 
   result.add quote do:
     type
-      `schemeP` {.pure.} = enum
-        Http = "http",
+      `SchemeP` {.pure.} = enum
         Https = "https",
-        Ws = "ws",
+        Http = "http",
         Wss = "wss"
+        Ws = "ws",
 
       `vsP` = proc (`queryP`: JsonNode = nil; `bodyP`: JsonNode = nil;
          `headerP`: JsonNode = nil; `pathP`: JsonNode = nil;
@@ -1033,6 +1053,7 @@ proc preamble(oac: NimNode): NimNode =
         route*: string
         base*: string
         host*: string
+        schemes*: set[Scheme]
         url*: proc (`protoP`: Scheme; `hostP`: string; `baseP`: string;
                     `routeP`: string; `pathP`: JsonNode): string
 
@@ -1042,6 +1063,18 @@ proc preamble(oac: NimNode): NimNode =
       result = T(name: `tP`.name, meth: `tP`.meth, host: `tP`.host,
                  route: `tP`.route, validator: `tP`.validator,
                  url: `tP`.url)
+
+    proc pickScheme(`tP`: `oac`): Option[Scheme] =
+      ## select a supported scheme from a set of candidates
+      for `schemeP` in Scheme.low..Scheme.high:
+        if `schemeP` notin `tP`.schemes:
+          continue
+        if `schemeP` in [Scheme.Https, Scheme.Wss]:
+          when defined(ssl):
+            return some(`schemeP`)
+          else:
+            continue
+        return some(`schemeP`)
 
     proc validateParameter(`jsP`: JsonNode; `kindP`: JsonNodeKind;
       `requiredP`: bool; `defaultP`: JsonNode = nil): JsonNode =
