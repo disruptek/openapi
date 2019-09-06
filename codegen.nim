@@ -13,6 +13,12 @@ import paths
 from schema2 import OpenApi2
 
 type
+  Scheme {.pure.} = enum
+    Http = "http",
+    Https = "https",
+    Ws = "ws",
+    Wss = "wss"
+
   PathItem = object of ConsumeResult
     path*: string
     parsed*: ParserResult
@@ -20,7 +26,7 @@ type
     host*: string
     operations*: Table[string, Operation]
     parameters*: Parameters
-    roottype*: NimNode
+    generator*: Generator
 
   ParameterIn = enum
     InQuery = "query"
@@ -60,6 +66,10 @@ type
     typename*: NimNode
     prepname*: NimNode
     urlname*: NimNode
+
+  Generator = object of ConsumeResult
+    schemes: set[Scheme]
+    roottype: NimNode
 
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   ## instantiate a new parameter from a JsonNode schema
@@ -478,7 +488,7 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
     for param in op.parameters.forLocation(InPath):
       assert false, $op & " has param " & $param & " but path isn't a template"
     body.add quote do:
-      result = `protocol` & "://" & `host` & `base` & `route`
+      result = $`protocol` & "://" & `host` & `base` & `route`
   else:
     let
       parsed = path.path.parseTemplate
@@ -512,10 +522,10 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
     body.add quote do:
       if `hydrated`.isNone:
         raise newException(ValueError, "unable to fully hydrate path")
-      result = `protocol` & "://" & `host` & `base` & `hydrated`.get()
+      result = $`protocol` & "://" & `host` & `base` & `hydrated`.get()
 
   var params = @[ident"string"]
-  params.add newIdentDefs(protocol, ident"string")
+  params.add newIdentDefs(protocol, ident"Scheme")
   params.add newIdentDefs(host, ident"string")
   params.add newIdentDefs(base, ident"string")
   params.add newIdentDefs(route, ident"string")
@@ -556,9 +566,10 @@ proc makeCallWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode
   body.add newAssignment(validIdent, validatorCall)
 
   when defined(ssl):
-    var proto = newStrLitNode("https")
+    var proto = ident"Https"
   else:
-    var proto = newStrLitNode("http")
+    var proto = ident"Http"
+
   var
     urlProc = newDotExpr(callName, ident"url")
     urlHost = newDotExpr(callName, ident"host")
@@ -760,7 +771,7 @@ proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
 proc makeCallType(path: PathItem; op: Operation): NimNode =
   let
     saneType = op.typename
-    oac = path.roottype
+    oac = path.generator.roottype
   result = quote do:
     type
       `saneType` = ref object of `oac`
@@ -869,11 +880,11 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   result.ast.add path.makeCallVar(result)
   result.ok = true
 
-proc newPathItem(root: JsonNode; oac: NimNode; path: string; input: JsonNode): PathItem =
+proc newPathItem(gen: Generator; path: string; input: JsonNode): PathItem =
   ## create a PathItem result for a parsed node
-  var
-    op: Operation
-  result = PathItem(ok: false, roottype: oac, path: path, js: input)
+  let root = gen.js
+  var op: Operation
+  result = PathItem(ok: false, generator: gen, path: path, js: input)
   if root != nil and root.kind == JObject and "basePath" in root:
     if root["basePath"].kind == JString:
       result.basePath = root["basePath"].getStr
@@ -902,8 +913,9 @@ proc newPathItem(root: JsonNode; oac: NimNode; path: string; input: JsonNode): P
     result.operations[$opName] = op
   result.ok = true
 
-iterator paths(root: JsonNode; oac: NimNode; ftype: FieldTypeDef): PathItem =
+iterator paths(gen: Generator; ftype: FieldTypeDef): PathItem =
   ## yield path items found in the given node
+  let root = gen.js
   var
     schema: Schema
     pschema: Schema = nil
@@ -941,7 +953,7 @@ iterator paths(root: JsonNode; oac: NimNode; ftype: FieldTypeDef): PathItem =
         if not k.toLower.startsWith("x-"):
           warning "unrecognized path: " & k
         continue
-      yield root.newPathItem(oac, k, v)
+      yield gen.newPathItem(k, v)
     break
 
 proc prefixedPluck(js: JsonNode; field: string; indent=0): string =
@@ -1003,9 +1015,16 @@ proc preamble(oac: NimNode): NimNode =
     hostP = ident"host"
     baseP = ident"base"
     routeP = ident"route"
+    schemeP = ident"Scheme"
 
   result.add quote do:
     type
+      `schemeP` {.pure.} = enum
+        Http = "http",
+        Https = "https",
+        Ws = "ws",
+        Wss = "wss"
+
       `vsP` = proc (`queryP`: JsonNode = nil; `bodyP`: JsonNode = nil;
          `headerP`: JsonNode = nil; `pathP`: JsonNode = nil;
          `formP`: JsonNode = nil): JsonNode
@@ -1014,7 +1033,7 @@ proc preamble(oac: NimNode): NimNode =
         route*: string
         base*: string
         host*: string
-        url*: proc (`protoP`: string; `hostP`: string; `baseP`: string;
+        url*: proc (`protoP`: Scheme; `hostP`: string; `baseP`: string;
                     `routeP`: string; `pathP`: JsonNode): string
 
     proc `dollP`*(`bodyP`: `oac`): string = rest.`dollP`(`bodyP`)
@@ -1075,7 +1094,7 @@ proc massageHeaders(node: JsonNode): seq[tuple[key: string, val: string]] =
     result.add (key: k, val: $v)
     """
 
-proc consume(content: string): ConsumeResult {.compileTime.} =
+proc consume(content: string): Generator {.compileTime.} =
   ## parse a string which might hold an openapi definition
   when false:
     var
@@ -1084,7 +1103,7 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
       typedefs: seq[FieldTypeDef]
       tree: WrappedField
 
-  result = ConsumeResult(ok: false)
+  result = Generator(ok: false)
 
   while true:
     try:
@@ -1118,8 +1137,8 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
     result.ast.maybeAddExternalDocs(result.js)
 
     # add common code
-    let oac = genSym(ident="OpenApiRestCall")
-    result.ast.add preamble(oac)
+    result.roottype = genSym(ident="OpenApiRestCall")
+    result.ast.add result.roottype.preamble
 
     when false:
       tree = newBranch[FieldTypeDef, WrappedItem](anything({}), "tree")
@@ -1158,8 +1177,18 @@ proc consume(content: string): ConsumeResult {.compileTime.} =
             warning "unable to make typedef for " & k
           result.ast.add typeSection
 
+    # determine which schemes we'll support
+    if "schemes" notin result.js or result.js["schemes"].kind != JArray:
+      error "no schemes defined"
+      return
+    for s in result.js["schemes"]:
+      if s.kind != JString:
+        error "wrong type for scheme: " & $s.kind
+        return
+      result.schemes.incl parseEnum[Scheme](s.getStr)
+
     # add whatever we can for each operation
-    for path in result.js.paths(oac, result.schema):
+    for path in result.paths(result.schema):
       for meth, op in path.operations.pairs:
         result.ast.add op.ast
 
