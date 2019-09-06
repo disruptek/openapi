@@ -522,12 +522,12 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
   params.add newIdentDefs(pathObj, ident"JsonNode")
   result = newProc(name, params, body)
 
-proc locationParamDefs(op: Operation): seq[NimNode] =
+proc locationParamDefs(op: Operation; nillable: bool): seq[NimNode] =
   ## produce a list of name/value parameters for each location
   for location in ParameterIn.low..ParameterIn.high:
     var locIdent = newIdentNode($location)
     # we require all locations for signature reasons
-    result.add locIdent.toJsonParameter(required=false)
+    result.add locIdent.toJsonParameter(required=not nillable)
 
 proc makeCallWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
   ## a call that gets passed JsonNodes for each parameter section
@@ -554,11 +554,27 @@ proc makeCallWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode
 
   var validatorCall = validatorProc.newCall(validatorParams)
   body.add newAssignment(validIdent, validatorCall)
-  body.add newAssignment(output, validIdent)
 
-  var params = @[ident"JsonNode"]
+  when defined(ssl):
+    var proto = newStrLitNode("https")
+  else:
+    var proto = newStrLitNode("http")
+  var
+    urlProc = newDotExpr(callName, ident"url")
+    urlHost = newDotExpr(callName, ident"host")
+    urlBase = newDotExpr(callName, ident"base")
+    urlRoute = newDotExpr(callName, ident"route")
+  body.add newVarStmt(ident"url", newCall(urlProc, proto, urlHost,
+                                          urlBase, urlRoute, ident"path"))
+  body.add newAssignment(output, newCall(ident"newRecallable",
+                                         callName,
+                                         ident"url",
+                                         newCall(ident"massageHeaders",
+                                                 ident"header")))
+
+  var params = @[ident"Recallable"]
   params.add newIdentDefs(callName, callType)
-  params &= op.locationParamDefs
+  params &= op.locationParamDefs(nillable=false)
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
 proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode] =
@@ -589,8 +605,8 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
     required = false
     if location in op.parameters.forms:
       body.add newCommentStmtNode("parameters in `" & loco & "` object:")
-    for param in op.parameters.forLocation(location):
-      body.add param.documentation(Json, root)
+      for param in op.parameters.forLocation(location):
+        body.add param.documentation(Json, root)
 
     # the body IS the section, so don't bother creating a JObject for it
     if location != InBody:
@@ -627,7 +643,7 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
 
   var params = @[ident"JsonNode"]
   #params.add newIdentDefs(callName, callType)
-  params &= op.locationParamDefs
+  params &= op.locationParamDefs(nillable=false)
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
 proc usesJsonWhenNative(param: Parameter): bool =
@@ -736,7 +752,7 @@ proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
   body.add newAssignment(output, validatorCall)
 
   var
-    params = @[ident"JsonNode"]
+    params = @[ident"Recallable"]
   params.add newIdentDefs(callName, callType)
   params &= op.namedParamDefs
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
@@ -1005,7 +1021,8 @@ proc preamble(oac: NimNode): NimNode =
 
     proc `createP`*[`T`: `oac`](`tP`: `T`): `T` =
       result = T(name: `tP`.name, meth: `tP`.meth, host: `tP`.host,
-                 path: `tP`.path, validator: `tP`.validator)
+                 route: `tP`.route, validator: `tP`.validator,
+                 url: `tP`.url)
 
     proc validateParameter(`jsP`: JsonNode; `kindP`: JsonNodeKind;
       `requiredP`: bool; `defaultP`: JsonNode = nil): JsonNode =
@@ -1050,6 +1067,12 @@ proc hydratePath(input: JsonNode; segments: seq[PathToken]): Option[string] =
   if remainder.isNone:
     return
   result = some(head & remainder.get())
+
+proc massageHeaders(node: JsonNode): seq[tuple[key: string, val: string]] =
+  if node == nil or node.kind != JObject or node.len == 0:
+    return
+  for k, v in node.pairs:
+    result.add (key: k, val: $v)
     """
 
 proc consume(content: string): ConsumeResult {.compileTime.} =
