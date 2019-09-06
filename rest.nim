@@ -96,12 +96,14 @@ proc newRestClient*(): RestClient =
   result.initRestClient()
 
 method newRecallable*(call: RestCall; url: string;
-  headers: openArray[tuple[key: string, val: string]]): Recallable
+  headers: openArray[tuple[key: string, val: string]];
+  body: JsonNode = nil): Recallable
   {.base,raises: [Exception].} =
   ## make a new HTTP request that we can reissue if desired
   new result
   result.url = url
   result.retries = 0
+  result.json = body
   #
   # TODO: disambiguate responses to requests?
   #
