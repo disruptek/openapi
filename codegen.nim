@@ -67,9 +67,11 @@ type
     prepname*: NimNode
     urlname*: NimNode
 
-  Generator = object of ConsumeResult
-    schemes: set[Scheme]
-    roottype: NimNode
+  Generator* = object of ConsumeResult
+    schemes*: set[Scheme]
+    roottype*: NimNode
+    inputfn*: string
+    outputfn*: string
 
 converter toNimNode(scheme: Scheme): NimNode =
   var s = $scheme
@@ -1127,7 +1129,10 @@ proc massageHeaders(node: JsonNode): seq[tuple[key: string, val: string]] =
     result.add (key: k, val: $v)
     """
 
-proc consume(content: string): Generator {.compileTime.} =
+proc newGenerator*(inputfn: string; outputfn: string): Generator {.compileTime.} =
+  result = Generator(ok: false, inputfn: inputfn, outputfn: outputfn)
+
+proc consume*(generator: var Generator; content: string) {.compileTime.} =
   ## parse a string which might hold an openapi definition
   when false:
     var
@@ -1136,14 +1141,12 @@ proc consume(content: string): Generator {.compileTime.} =
       typedefs: seq[FieldTypeDef]
       tree: WrappedField
 
-  result = Generator(ok: false)
-
   while true:
     try:
-      result.js = content.parseJson()
-      if result.js.kind != JObject:
+      generator.js = content.parseJson()
+      if generator.js.kind != JObject:
         error "i was expecting a json object, but i got " &
-          $result.js.kind
+          $generator.js.kind
         break
     except JsonParsingError as e:
       error "error parsing the input as json: " & e.msg
@@ -1152,34 +1155,34 @@ proc consume(content: string): Generator {.compileTime.} =
       error "json parsing failed, probably due to an overlarge number"
       break
 
-    if "swagger" in result.js:
-      if result.js["swagger"].getStr != "2.0":
+    if "swagger" in generator.js:
+      if generator.js["swagger"].getStr != "2.0":
         error "we only know how to parse openapi-2.0 atm"
         break
-      result.schema = OpenApi2
+      generator.schema = OpenApi2
     else:
       error "no swagger version found in the input"
       break
 
-    let pr = result.schema.parseSchema(result.js)
+    let pr = generator.schema.parseSchema(generator.js)
     if not pr.ok:
       break
 
-    result.ast = newStmtList []
-    result.ast.add newCommentStmtNode(result.js.renderPreface)
-    result.ast.maybeAddExternalDocs(result.js)
+    generator.ast = newStmtList []
+    generator.ast.add newCommentStmtNode(generator.js.renderPreface)
+    generator.ast.maybeAddExternalDocs(generator.js)
 
     # add common code
-    result.roottype = genSym(ident="OpenApiRestCall")
-    result.ast.add result.roottype.preamble
+    generator.roottype = genSym(ident="OpenApiRestCall")
+    generator.ast.add generator.roottype.preamble
 
     when false:
       tree = newBranch[FieldTypeDef, WrappedItem](anything({}), "tree")
       tree["definitions"] = newBranch[FieldTypeDef, WrappedItem](anything({}), "definitions")
       tree["parameters"] = newBranch[FieldTypeDef, WrappedItem](anything({}), "parameters")
-      if "definitions" in result.js:
+      if "definitions" in generator.js:
         let
-          definitions = result.schema["definitions"]
+          definitions = generator.schema["definitions"]
         typedefs = toSeq(definitions.schema.values)
         assert typedefs.len == 1, "dunno what to do with " &
           $typedefs.len & " definitions schemas"
@@ -1187,7 +1190,7 @@ proc consume(content: string): Generator {.compileTime.} =
         var
           typeSection = newNimNode(nnkTypeSection)
           deftree = tree["definitions"]
-        for k, v in result.js["definitions"]:
+        for k, v in generator.js["definitions"]:
           parsed = v.parsePair(k, schema)
           if not parsed.ok:
             error "parse error on definition for " & k
@@ -1208,44 +1211,45 @@ proc consume(content: string): Generator {.compileTime.} =
             typeSection.add onedef.ast
           else:
             warning "unable to make typedef for " & k
-          result.ast.add typeSection
+          generator.ast.add typeSection
 
     # determine which schemes we'll support
-    if "schemes" notin result.js or result.js["schemes"].kind != JArray:
+    if "schemes" notin generator.js or generator.js["schemes"].kind != JArray:
       error "no schemes defined"
       return
-    for s in result.js["schemes"]:
+    for s in generator.js["schemes"]:
       if s.kind != JString:
         error "wrong type for scheme: " & $s.kind
         return
-      result.schemes.incl parseEnum[Scheme](s.getStr)
+      generator.schemes.incl parseEnum[Scheme](s.getStr)
 
     # add whatever we can for each operation
-    for path in result.paths(result.schema):
+    for path in generator.paths(generator.schema):
       for meth, op in path.operations.pairs:
-        result.ast.add op.ast
+        generator.ast.add op.ast
 
-    result.ok = true
+    generator.ok = true
     break
 
-macro openapi*(inputfn: static[string]; outputfn: static[string]=""; body: untyped): untyped =
+template generate*(name: untyped; input: string; output: string; body: untyped): untyped {.dirty.} =
   ## parse input json filename and output nim target library
-  # TODO: this should get renamed to openApiClient to make room for openApiServer
-  let content = staticRead(`inputfn`)
-  var consumed = content.consume()
-  if consumed.ok == false:
-    error "unable to parse " & `inputfn`
-    return
-  result = consumed.ast
-  if body != nil:
-    result.add body
 
-  if `outputfn` == "":
-    hint "provide filename.nim to save Nim source"
-  elif not `outputfn`.endsWith(".nim"):
-    hint "i'm afraid to overwrite " & `outputfn`
-  else:
-    hint "writing " & `outputfn`
-    writeFile(outputfn, result.repr)
-    result = newNimNode(nnkImportStmt)
-    result.add newStrLitNode(outputfn)
+  macro name(embody: untyped): untyped =
+    var generator = newGenerator(inputfn= input, outputfn= output)
+    let content = staticRead(generator.inputfn)
+    generator.consume(content)
+    if generator.ok == false:
+      error "parse error"
+
+    body
+
+    if not generator.outputfn.endsWith(".nim"):
+      hint "i'm afraid to overwrite " & generator.outputfn
+    else:
+      hint "writing " & generator.outputfn
+      writeFile(generator.outputfn, generator.ast.repr)
+      result = newNimNode(nnkImportStmt)
+      result.add newStrLitNode(generator.outputfn)
+
+template render*(name: typed; arbody: untyped): untyped =
+  name(arbody)
