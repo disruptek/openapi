@@ -5,7 +5,7 @@
 First, you need to convert your YAML swagger input into JSON:
 
 ```bash
-$ yq . fungenerators.com/lottery/1.5/swagger.yaml
+$ yq . fungenerators.com/lottery/1.5/swagger.yaml > input.json
 ```
 
 You can render the API every time you build you project, or you can build it via a separate source input.  Either way, it looks the same:
@@ -17,14 +17,17 @@ import httpcore
 
 import openapi/codegen
 
-# 1) input JSON source, 2) output Nim source
-openapi "input.json", "output.nim":
-  # whatever you write in this block gets appended to your output;
-  # you are in the same scope as your generated API, so you can
-  # perform hackery or loosen exports as you wish...
+# 0) API handle, 1) input JSON source, 2) output Nim source
+generate myAPI, "input.json", "output.nim":
+  ## here you can mess with the generator directly as needed...
   
-  # expose some useful REST methods...
-  export rest
+  # add a constant from the input to the API...
+  let service = generator.js["info"]["x-serviceName"].getStr
+  generator.ast.add newConstStmt(ident"myService", newStrLitNode(service))
+
+render myAPI:
+  ## whatever you write here will be included in your API verbatim
+  echo "service " & myService & " loaded"
 
 # use the API...
 let
