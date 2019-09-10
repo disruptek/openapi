@@ -1246,10 +1246,18 @@ template generate*(name: untyped; input: string; output: string; body: untyped):
     if not generator.outputfn.endsWith(".nim"):
       hint "i'm afraid to overwrite " & generator.outputfn
     else:
+      generator.ast.add embody
       hint "writing " & generator.outputfn
       writeFile(generator.outputfn, generator.ast.repr)
-      result = newNimNode(nnkImportStmt)
-      result.add newStrLitNode(generator.outputfn)
+      when true:
+        result = newNimNode(nnkImportStmt)
+        result.add newStrLitNode(generator.outputfn)
+      else:
+        var imports = newNimNode(nnkImportStmt)
+        imports.add newStrLitNode(generator.outputfn)
+        result = newStmtList()
+        result.add imports
+        result.add embody
 
 template render*(name: typed; arbody: untyped): untyped =
   name(arbody)
