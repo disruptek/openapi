@@ -68,15 +68,6 @@ type
     inputfn*: string
     outputfn*: string
 
-converter toNimNode(scheme: Scheme): NimNode =
-  var s = $scheme
-  result = newDotExpr(ident"Scheme", newIdentNode(s.capitalizeAscii))
-
-converter toNimNode(schemes: set[Scheme]): NimNode =
-  result = newNimNode(nnkCurly)
-  for scheme in schemes:
-    result.add scheme.toNimNode
-
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   ## instantiate a new parameter from a JsonNode schema
   assert input != nil and input.kind == JObject, "bizarre input: " &

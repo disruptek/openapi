@@ -60,6 +60,15 @@ type
     major: JsonNodeKind
     minor: string
 
+converter toNimNode*(scheme: Scheme): NimNode =
+  var s = $scheme
+  result = newDotExpr(ident"Scheme", newIdentNode(s.capitalizeAscii))
+
+converter toNimNode*(schemes: set[Scheme]): NimNode =
+  result = newNimNode(nnkCurly)
+  for scheme in schemes:
+    result.add scheme.toNimNode
+
 proc `$`*(ftype: FieldTypeDef): string =
   if ftype == nil:
     return "(nil)"
