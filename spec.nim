@@ -3,6 +3,7 @@ import options
 import json
 import tables
 import strutils
+import hashes
 
 when not defined(release):
   import strformat
@@ -68,6 +69,9 @@ converter toNimNode*(schemes: set[Scheme]): NimNode =
   result = newNimNode(nnkCurly)
   for scheme in schemes:
     result.add scheme.toNimNode
+
+proc hash*(scheme: Scheme): Hash =
+  result = hash(ord(scheme))
 
 proc `$`*(ftype: FieldTypeDef): string =
   if ftype == nil:
