@@ -44,6 +44,12 @@ type
     Head = "head"
     Patch = "patch"
 
+  Scheme* {.pure.} = enum
+    Https = "https",
+    Http = "http",
+    Wss = "wss"
+    Ws = "ws",
+
   ConsumeResult* = object of RootObj
     ok*: bool
     schema*: Schema
@@ -253,6 +259,8 @@ proc guessType*(js: JsonNode; root: JsonNode): Option[GuessTypeResult] =
 
   case input.kind:
   of JObject:
+    var
+      format = input.getOrDefault("format").getStr
     # see if it's an untyped value
     if input.len == 0:
       # this is a map like {}
@@ -269,8 +277,10 @@ proc guessType*(js: JsonNode; root: JsonNode): Option[GuessTypeResult] =
       elif "additionalProperties" in input:
         input.whine "maps should have a type=object property"
         major = "object"
+      elif "enum" in input:
+        major = "string"
+        format = "enum"
       elif "allOf" in input:
-        input.whine "allOf is poorly implemented"
         major = "object"
         assert input["allOf"].kind == JArray
         for n in input["allOf"]:
@@ -280,9 +290,10 @@ proc guessType*(js: JsonNode; root: JsonNode): Option[GuessTypeResult] =
         # we'll return if we cannot recognize the type
         warning "no type discovered:\n" & input.pretty
         return some((major: JNull, minor: ""))
+      if "allOf" in input:
+        input.whine "allOf is poorly implemented"
     assert major != "", "logic error; ie. someone forgot to add logic"
     let
-      format = input.getOrDefault("format").getStr
       kind = major.guessJsonNodeKind()
     if kind.isSome:
       result = some((major: kind.get(), minor: format))

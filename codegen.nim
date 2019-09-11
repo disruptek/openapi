@@ -9,16 +9,11 @@ import strtabs
 import spec
 import parser
 import paths
+import hydrate
 
 from schema2 import OpenApi2
 
 type
-  Scheme {.pure.} = enum
-    Https = "https",
-    Http = "http",
-    Wss = "wss"
-    Ws = "ws",
-
   PathItem = object of ConsumeResult
     path*: string
     parsed*: ParserResult
