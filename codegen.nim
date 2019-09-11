@@ -67,6 +67,9 @@ type
     roottype*: NimNode
     inputfn*: string
     outputfn*: string
+    imports*: NimNode
+    types*: NimNode
+    recallable*: NimNode
 
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   ## instantiate a new parameter from a JsonNode schema
@@ -255,7 +258,7 @@ proc safeAdd(parameters: var Parameters; p: Parameter; prefix=""): Option[string
     return some(msg)
   parameters.add p
 
-proc initParameters(parameters: var Parameters) =
+proc init(parameters: var Parameters) =
   ## prepare a parameter container to accept parameters
   parameters.sane = newStringTable(modeStyleInsensitive)
   parameters.tab = initTable[Hash, Parameter]()
@@ -263,7 +266,7 @@ proc initParameters(parameters: var Parameters) =
 
 proc readParameters(root: JsonNode; js: JsonNode): Parameters =
   ## parse parameters out of an arbitrary JsonNode
-  result.initParameters()
+  result.init()
   for param in js:
     var parameter = root.newParameter(param)
     if not parameter.ok:
@@ -510,8 +513,8 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
 
     # construct a list of segments we'll use to hydrate the path
     for segment in parsed.segments:
-      var par = newPar([newIdentNode($segment.kind),
-                        newStrLitNode(segment.value)])
+      var par = newPar([newColonExpr(ident"kind", newIdentNode($segment.kind)),
+                        newColonExpr(ident"value", newStrLitNode(segment.value))])
       bracket.add par
     body.add newConstStmt(segments, bracket.prefix("@"))
 
@@ -537,7 +540,7 @@ proc locationParamDefs(op: Operation; nillable: bool): seq[NimNode] =
     # we require all locations for signature reasons
     result.add locIdent.toJsonParameter(required=not nillable)
 
-proc makeCallWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
+proc makeCallWithLocationInputs(generator: var Generator; op: Operation): Option[NimNode] =
   ## a call that gets passed JsonNodes for each parameter section
   let
     name = newExportedIdentNode("call")
@@ -581,18 +584,18 @@ proc makeCallWithLocationInputs(op: Operation; callType: NimNode; root: JsonNode
       raise newException(IOError, "unable to find a supported scheme")
   body.add newLetStmt(ident"url", newCall(urlProc, protocol, urlHost,
                                           urlBase, urlRoute, path))
-  body.add newLetStmt(ident"headers", newCall(ident"massageHeaders",
-                                            newCall(newDotExpr(validIdent,
-                                                       ident"getOrDefault"),
-                                            newStrLitNode("header"))))
-  body.add newAssignment(output, newCall(ident"newRecallable",
-                                         callName,
-                                         ident"url",
-                                         ident"headers",
-                                         content))
+  let heads = newCall(newDotExpr(validIdent,
+                                 ident"getOrDefault"),
+                      newStrLitNode("header"))
+  if generator.recallable == nil:
+    body.add newAssignment(output, newCall(ident"newRecallable", callName,
+                                           ident"url", heads, content))
+  else:
+    body.add newAssignment(output, newCall(generator.recallable, callName,
+                                           ident"url", validIdent))
 
   var params = @[ident"Recallable"]
-  params.add newIdentDefs(callName, callType)
+  params.add newIdentDefs(callName, op.typename)
   params &= op.locationParamDefs(nillable=false)
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
@@ -841,7 +844,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
       else:
         warning "bad response:\n" & resp.pretty
 
-  result.parameters.initParameters()
+  result.parameters.init()
   # inherited parameters from the PathItem
   for parameter in path.parameters:
     var badadd = result.parameters.safeAdd(parameter, sane)
@@ -858,8 +861,10 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
 
   result.ast = newStmtList()
 
+  var generator = path.generator
+
   # start with the call type
-  result.ast.add path.generator.makeCallType(path, result)
+  result.ast.add generator.makeCallType(path, result)
 
   # add a routine to convert a path object into a url
   result.ast.add path.makeUrl(result)
@@ -872,7 +877,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   result.ast.add validator.get()
 
   # if we don't have locations, we cannot support the operation at all
-  let locations = result.makeCallWithLocationInputs(result.typename, root)
+  let locations = generator.makeCallWithLocationInputs(result)
   if locations.isNone:
     warning "unable to compose call for `" & sane & "`"
     return
@@ -991,18 +996,6 @@ proc preamble(oac: NimNode): NimNode =
   ## code common to all apis
   result = newStmtList([])
 
-  # imports
-  var imports = newNimNode(nnkImportStmt)
-  for module in ["json", "options", "openapi/rest"]:
-    imports.add newIdentNode(module)
-  result.add imports
-
-  # exports
-  when false:
-    var exports = newNimNode(nnkExportStmt)
-    exports.add ident"rest"
-    result.add exports
-
   let
     jsP = ident"js"
     kindP = ident"kind"
@@ -1024,6 +1017,8 @@ proc preamble(oac: NimNode): NimNode =
     routeP = ident"route"
     SchemeP = ident"Scheme"
     schemeP = ident"scheme"
+    hashP = ident"hash"
+    oarcP = ident"OpenApiRestCall"
 
   result.add quote do:
     type
@@ -1036,7 +1031,7 @@ proc preamble(oac: NimNode): NimNode =
       `vsP` = proc (`queryP`: JsonNode = nil; `bodyP`: JsonNode = nil;
          `headerP`: JsonNode = nil; `pathP`: JsonNode = nil;
          `formP`: JsonNode = nil): JsonNode
-      `oac` = ref object of RestCall
+      `oarcP` = ref object of RestCall
         validator*: `vsP`
         route*: string
         base*: string
@@ -1044,6 +1039,11 @@ proc preamble(oac: NimNode): NimNode =
         schemes*: set[Scheme]
         url*: proc (`protoP`: Scheme; `hostP`: string; `baseP`: string;
                     `routeP`: string; `pathP`: JsonNode): string
+
+      # this gives the user a type to hook into for code in their macro
+      `oac` = ref object of `oarcP`
+
+    proc `hashP`(`schemeP`: Scheme): Hash = result = hash(ord(`schemeP`))
 
     proc `dollP`*(`bodyP`: `oac`): string = rest.`dollP`(`bodyP`)
 
@@ -1084,10 +1084,13 @@ proc preamble(oac: NimNode): NimNode =
   # i'm getting lazy
   result.add parseStmt """
 type
+  KeyVal = tuple[key: string; val: string]
   PathTokenKind = enum ConstantSegment, VariableSegment
   PathToken = tuple
     kind: PathTokenKind
     value: string
+  """
+  result.add parseStmt """
 proc hydratePath(input: JsonNode; segments: seq[PathToken]): Option[string] =
   ## reconstitute a path with constants and variable values taken from json
   var head: string
@@ -1107,19 +1110,62 @@ proc hydratePath(input: JsonNode; segments: seq[PathToken]): Option[string] =
   if remainder.isNone:
     return
   result = some(head & remainder.get())
-
-proc massageHeaders(node: JsonNode): seq[tuple[key: string, val: string]] =
-  if node == nil or node.kind != JObject or node.len == 0:
-    return
-  for k, v in node.pairs:
-    result.add (key: k, val: $v)
-    """
+  """
+  when false:
+    result.add parseStmt """
+  proc massageHeaders(node: JsonNode): seq[KeyVal] =
+    if node == nil or node.kind != JObject or node.len == 0:
+      return
+    for kv in node.pairs:
+      assert kv.val.kind == JString
+      result.add (key: kv.key, val: kv.val.getStr)
+      """
 
 proc newGenerator*(inputfn: string; outputfn: string): Generator {.compileTime.} =
+  ## create a new generator
   result = Generator(ok: false, inputfn: inputfn, outputfn: outputfn)
+  result.ast = newStmtList()
+  result.imports = newNimNode(nnkImportStmt)
+
+proc init*(generator: var Generator; content: string) =
+  ## initialize a generator with a string holding the json api input
+  try:
+    generator.js = content.parseJson()
+    if generator.js.kind != JObject:
+      error "i was expecting a json object, but i got " &
+        $generator.js.kind
+  except JsonParsingError as e:
+    error "error parsing the input as json: " & e.msg
+  except ValueError:
+    error "json parsing failed, probably due to an overlarge number"
+
+  if "swagger" in generator.js:
+    if generator.js["swagger"].getStr != "2.0":
+      error "we only know how to parse openapi-2.0 atm"
+    generator.schema = OpenApi2
+  else:
+    error "no swagger version found in the input"
+
+  let pr = generator.schema.parseSchema(generator.js)
+  if not pr.ok:
+    return
+
+  # setup some imports we'll want so the user doesn't need to add them
+  for module in ["json", "options", "hashes"]:
+    generator.imports.add newIdentNode(module)
+
+  # add the preface so we're ready for the user to add code
+  generator.ast.add newCommentStmtNode(generator.js.renderPreface)
+  generator.ast.maybeAddExternalDocs(generator.js)
+
+  # add common code
+  if generator.roottype == nil:
+    generator.roottype = genSym(ident="OpenApiRestCall")
+  generator.ast.add generator.roottype.preamble
 
 proc consume*(generator: var Generator; content: string) {.compileTime.} =
   ## parse a string which might hold an openapi definition
+
   when false:
     var
       parsed: ParserResult
@@ -1127,41 +1173,21 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
       typedefs: seq[FieldTypeDef]
       tree: WrappedField
 
+  # set the default recallable factory
+  if generator.recallable == nil:
+    generator.imports.add ident"openapi/rest"
+    generator.recallable = ident"newRecallable"
+  else:
+    # build the declaration for the recallable method
+    let hookP = generator.recallable
+    var params = @[ident"Recallable"]
+    params.add newIdentDefs(ident"call", ident"OpenApiRestCall")
+    params.add newIdentDefs(ident"url", ident"string")
+    params.add newIdentDefs(ident"input", ident"JsonNode")
+    generator.ast.add newProc(hookP, params,
+      body = newEmptyNode(), procType = nnkMethodDef)
+
   while true:
-    try:
-      generator.js = content.parseJson()
-      if generator.js.kind != JObject:
-        error "i was expecting a json object, but i got " &
-          $generator.js.kind
-        break
-    except JsonParsingError as e:
-      error "error parsing the input as json: " & e.msg
-      break
-    except ValueError:
-      error "json parsing failed, probably due to an overlarge number"
-      break
-
-    if "swagger" in generator.js:
-      if generator.js["swagger"].getStr != "2.0":
-        error "we only know how to parse openapi-2.0 atm"
-        break
-      generator.schema = OpenApi2
-    else:
-      error "no swagger version found in the input"
-      break
-
-    let pr = generator.schema.parseSchema(generator.js)
-    if not pr.ok:
-      break
-
-    generator.ast = newStmtList []
-    generator.ast.add newCommentStmtNode(generator.js.renderPreface)
-    generator.ast.maybeAddExternalDocs(generator.js)
-
-    # add common code
-    generator.roottype = genSym(ident="OpenApiRestCall")
-    generator.ast.add generator.roottype.preamble
-
     when false:
       tree = newBranch[FieldTypeDef, WrappedItem](anything({}), "tree")
       tree["definitions"] = newBranch[FieldTypeDef, WrappedItem](anything({}), "definitions")
@@ -1223,28 +1249,33 @@ template generate*(name: untyped; input: string; output: string; body: untyped):
   macro name(embody: untyped): untyped =
     var generator = newGenerator(inputfn= input, outputfn= output)
     let content = staticRead(generator.inputfn)
+    generator.init(content)
+
+    # the user's code runs here to tweak the generator
+    body
+
     generator.consume(content)
     if generator.ok == false:
       error "parse error"
 
-    body
-
     if not generator.outputfn.endsWith(".nim"):
-      hint "i'm afraid to overwrite " & generator.outputfn
+      error "i'm afraid to overwrite " & generator.outputfn
+    hint "writing " & generator.outputfn
+    when true:
+      generator.ast.add embody
+      var ast = newStmtList(generator.imports, generator.ast)
+      writeFile(generator.outputfn, ast.repr)
+      result = newNimNode(nnkImportStmt)
+      result.add newStrLitNode(generator.outputfn)
     else:
-      hint "writing " & generator.outputfn
-      when true:
-        generator.ast.add embody
-        writeFile(generator.outputfn, generator.ast.repr)
-        result = newNimNode(nnkImportStmt)
-        result.add newStrLitNode(generator.outputfn)
-      else:
-        writeFile(generator.outputfn, generator.ast.repr)
-        var imports = newNimNode(nnkImportStmt)
-        imports.add newStrLitNode(generator.outputfn)
-        result = newStmtList()
-        result.add imports
-        result.add embody
+      var ast = newStmtList(generator.imports, generator.ast)
+      writeFile(generator.outputfn, ast.repr)
+      var imports = newNimNode(nnkImportStmt)
+      imports.add newStrLitNode(generator.outputfn)
+      result = newStmtList()
+      result.add imports
+      result.add embody
 
 template render*(name: typed; arbody: untyped): untyped =
+  # run the macro and add the user's code to the api we output
   name(arbody)
