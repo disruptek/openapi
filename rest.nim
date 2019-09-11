@@ -13,6 +13,7 @@ import strutils
 export httpcore.HttpMethod, is2xx, is3xx, is4xx, is5xx
 
 type
+  KeyVal = tuple[key: string; val: string]
   ResultFormat* = enum JSON, XML, RAW
 
   JsonResultPage* = JsonNode
@@ -60,6 +61,13 @@ type
   RetriesExhausted* = object of RestError     ## ran outta retries
   CallRequestError* = object of RestError     ## HTTP [45]00 status code
 
+proc massageHeaders*(node: JsonNode): seq[KeyVal] =
+  if node == nil or node.kind != JObject or node.len == 0:
+    return
+  for kv in node.pairs:
+    assert kv.val.kind == JString
+    result.add (key: kv.key, val: kv.val.getStr)
+
 iterator fibonacci*(start=0; stop=0): int {.raises: [].} =
   var
     y = if start == 0: 1 else: start
@@ -95,15 +103,14 @@ proc newRestClient*(): RestClient =
   new result
   result.initRestClient()
 
-method newRecallable*(call: RestCall; url: string;
-  headers: openArray[tuple[key: string, val: string]];
-  body: JsonNode = nil): Recallable
+method newRecallable*(call: RestCall; url: string; headers: HttpHeaders;
+                      body: string): Recallable
   {.base,raises: [Exception].} =
   ## make a new HTTP request that we can reissue if desired
   new result
   result.url = url
   result.retries = 0
-  result.json = body
+  result.body = body
   #
   # TODO: disambiguate responses to requests?
   #
@@ -111,14 +118,42 @@ method newRecallable*(call: RestCall; url: string;
     result.client = call.client
   else:
     result.client = newRestClient()
-  result.headers = newHttpHeaders(headers)
+  result.headers = headers
   result.client.headers = result.headers
   result.client.http.headers = result.headers
   result.meth = call.meth
 
+method newRecallable*(call: RestCall; url: string; headers: openArray[KeyVal];
+                      body: string): Recallable
+  {.base,raises: [Exception].} =
+  ## make a new HTTP request that we can reissue if desired
+  let heads = newHttpHeaders(headers)
+  result = newRecallable(call, url, heads, body)
+
+method newRecallable*(call: RestCall; url: string; headers: JsonNode = nil;
+                      body: JsonNode = nil): Recallable
+  {.base,raises: [Exception].} =
+  ## make a new HTTP request that we can reissue if desired
+  let
+    heads = headers.massageHeaders
+  var
+    content: string
+  if body != nil:
+    toUgly(content, body)
+  result = newRecallable(call, url, heads, content)
+
+method newRecallable*(call: RestCall; url: string; input: JsonNode): Recallable
+  {.base,raises: [Exception].} =
+  ## make a new HTTP request that we can reissue if desired
+  let
+    heads = input.getOrDefault("header")
+    body = input.getOrDefault("body")
+  result = newRecallable(call, url, heads, body)
+
 method newRecallable*(call: RestCall; url: string): Recallable
   {.base,raises: [Exception].} =
-  result = call.newRecallable(url, [])
+  ## make a new HTTP request that we can reissue if desired
+  result = newRecallable(call, url, newHttpHeaders(), "")
 
 proc issueRequest*(rec: Recallable): Future[AsyncResponse]
   {.raises: [AsyncError].} =
