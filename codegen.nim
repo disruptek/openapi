@@ -9,7 +9,6 @@ import strtabs
 import spec
 import parser
 import paths
-import hydrate
 
 from schema2 import OpenApi2
 
@@ -1043,7 +1042,7 @@ proc preamble(oac: NimNode): NimNode =
       # this gives the user a type to hook into for code in their macro
       `oac` = ref object of `oarcP`
 
-    proc `hashP`(`schemeP`: Scheme): Hash = result = hash(ord(`schemeP`))
+    proc `hashP`(`schemeP`: Scheme): Hash {.used.} = result = hash(ord(`schemeP`))
 
     proc `dollP`*(`bodyP`: `oac`): string = rest.`dollP`(`bodyP`)
 
@@ -1084,7 +1083,7 @@ proc preamble(oac: NimNode): NimNode =
   # i'm getting lazy
   result.add parseStmt """
 type
-  KeyVal = tuple[key: string; val: string]
+  KeyVal {.used.} = tuple[key: string; val: string]
   PathTokenKind = enum ConstantSegment, VariableSegment
   PathToken = tuple
     kind: PathTokenKind
