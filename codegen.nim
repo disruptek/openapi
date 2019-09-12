@@ -22,7 +22,7 @@ type
     parameters*: Parameters
     generator*: Generator
 
-  ParameterIn = enum
+  ParameterIn* = enum
     InQuery = "query"
     InBody = "body"
     InHeader = "header"
@@ -69,6 +69,7 @@ type
     imports*: NimNode
     types*: NimNode
     recallable*: NimNode
+    forms*: set[ParameterIn]
 
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   ## instantiate a new parameter from a JsonNode schema
@@ -672,10 +673,13 @@ proc usesJsonWhenNative(param: Parameter): bool =
   elif param.kind.get().major notin {JBool, JInt, JFloat, JString}:
     result = true
 
-proc namedParamDefs(op: Operation): seq[NimNode] =
+proc namedParamDefs(op: Operation; forms: set[ParameterIn]): seq[NimNode] =
   ## produce a list of name/value parameters per each operation input
   # add required params first,
   for param in op.parameters:
+    # the use may want to skip this section
+    if param.location notin forms:
+      continue
     if param.required:
       var
         sane = param.saneName
@@ -691,6 +695,9 @@ proc namedParamDefs(op: Operation): seq[NimNode] =
                                                default=param.default)
   # then add optional params
   for param in op.parameters:
+    # the use may want to skip this section
+    if param.location notin forms:
+      continue
     if not param.required:
       var
         sane = param.saneName
@@ -702,11 +709,12 @@ proc namedParamDefs(op: Operation): seq[NimNode] =
         result.add saneIdent.toNativeParameter(major, param.required,
                                                default=param.default)
 
-proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode): Option[NimNode] =
+proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option[NimNode] =
   ## create a proc to validate and compose inputs for a given call
   let
     name = newExportedIdentNode("call")
     callName = genSym(ident="call")
+    callType = op.typename
     output = ident"result"
   var
     validatorParams: seq[NimNode]
@@ -722,11 +730,20 @@ proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
 
   # document the parameters
   for param in op.parameters:
+    # the user may want to skip this section
+    if param.location notin generator.forms:
+      continue
     if param.usesJsonWhenNative:
-      body.add param.documentation(Json, root, name=param.saneName)
+      body.add param.documentation(Json, generator.js, name=param.saneName)
     else:
-      body.add param.documentation(Native, root, name=param.saneName)
+      body.add param.documentation(Native, generator.js, name=param.saneName)
   for location in ParameterIn.low..ParameterIn.high:
+    # we may just be skipping all of this section...
+    if location notin generator.forms:
+      validatorParams.add newNilLit()
+      continue
+
+    # look for the parameters in order to setup new JObjects
     block found:
       for param in op.parameters.forLocation(location):
         var section = genSym(ident= $location)
@@ -739,6 +756,9 @@ proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
 
   # assert proper parameter types and/or set defaults
   for param in op.parameters:
+    # the user may want to skip this section
+    if param.location notin generator.forms:
+      continue
     var
       insane = param.name
       sane = param.saneName
@@ -773,7 +793,7 @@ proc makeCallWithNamedArguments(op: Operation; callType: NimNode; root: JsonNode
   var
     params = @[ident"Recallable"]
   params.add newIdentDefs(callName, callType)
-  params &= op.namedParamDefs
+  params &= op.namedParamDefs(generator.forms)
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
 proc makeCallType(gen: Generator; path: PathItem; op: Operation): NimNode =
@@ -883,7 +903,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   result.ast.add locations.get()
 
   # we use the call type to make our call() operation with named args
-  let namedArgs = result.makeCallWithNamedArguments(result.typename, root)
+  let namedArgs = generator.makeCallWithNamedArguments(result)
   if namedArgs.isSome:
     result.ast.add namedArgs.get()
 
@@ -1009,7 +1029,7 @@ proc preamble(oac: NimNode): NimNode =
     tP = ident"t"
     createP = ident"clone"
     T = ident"T"
-    dollP = ident"`$`"
+    #dollP = ident"`$`"
     protoP = ident"protocol"
     hostP = ident"host"
     baseP = ident"base"
@@ -1044,9 +1064,9 @@ proc preamble(oac: NimNode): NimNode =
 
     proc `hashP`(`schemeP`: Scheme): Hash {.used.} = result = hash(ord(`schemeP`))
 
-    proc `dollP`*(`bodyP`: `oac`): string = rest.`dollP`(`bodyP`)
+    #proc `dollP`*(`bodyP`: `oac`): string = rest.`dollP`(`bodyP`)
 
-    proc `createP`*[`T`: `oac`](`tP`: `T`): `T` =
+    proc `createP`[`T`: `oac`](`tP`: `T`): `T` {.used.} =
       result = T(name: `tP`.name, meth: `tP`.meth, host: `tP`.host,
                  route: `tP`.route, validator: `tP`.validator,
                  url: `tP`.url)
@@ -1125,6 +1145,8 @@ proc newGenerator*(inputfn: string; outputfn: string): Generator {.compileTime.}
   result = Generator(ok: false, inputfn: inputfn, outputfn: outputfn)
   result.ast = newStmtList()
   result.imports = newNimNode(nnkImportStmt)
+  for location in ParameterIn.low .. ParameterIn.high:
+    result.forms.incl location
 
 proc init*(generator: var Generator; content: string) =
   ## initialize a generator with a string holding the json api input
@@ -1183,8 +1205,10 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
     params.add newIdentDefs(ident"call", ident"OpenApiRestCall")
     params.add newIdentDefs(ident"url", ident"string")
     params.add newIdentDefs(ident"input", ident"JsonNode")
+    var pragmas = newNimNode(nnkPragma)
+    pragmas.add ident"base"
     generator.ast.add newProc(hookP, params,
-      body = newEmptyNode(), procType = nnkMethodDef)
+      body = newEmptyNode(), procType = nnkMethodDef, pragmas = pragmas)
 
   while true:
     when false:
