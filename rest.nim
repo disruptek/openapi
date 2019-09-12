@@ -130,8 +130,8 @@ method newRecallable*(call: RestCall; url: string; headers: openArray[KeyVal];
   let heads = newHttpHeaders(headers)
   result = newRecallable(call, url, heads, body)
 
-method newRecallable*(call: RestCall; url: string; headers: JsonNode = nil;
-                      body: JsonNode = nil): Recallable
+method newRecallable*(call: RestCall; url: string; headers: JsonNode;
+                      body: JsonNode): Recallable
   {.base,raises: [Exception].} =
   ## make a new HTTP request that we can reissue if desired
   let
