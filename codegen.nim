@@ -1071,7 +1071,7 @@ proc preamble(oac: NimNode): NimNode =
                  route: `tP`.route, validator: `tP`.validator,
                  url: `tP`.url)
 
-    proc pickScheme(`tP`: `oac`): Option[Scheme] =
+    proc pickScheme(`tP`: `oac`): Option[Scheme] {.used.} =
       ## select a supported scheme from a set of candidates
       for `schemeP` in Scheme.low..Scheme.high:
         if `schemeP` notin `tP`.schemes:
