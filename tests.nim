@@ -49,22 +49,6 @@ suite "paths":
     for t in templates:
       var res = t.parseTemplate
       check res.ok == true
-      results.add (c: res.constants.join(","), v: res.variables.join(","))
-    check results == should
-    for t in nottemplates:
-      var res = t.parseTemplate
-      check res.ok == false
-  test "parse a path template in order":
-    var results: seq[tuple[c: string; v: string]]
-    var should = @[
-      ("", "path"), ("", "mime type"),
-      ("/", "path"), ("/path/", "path"),
-      ("/,/", "foo,bar"), ("/bif/", "foo,bar"),
-      ("/one/,three", "two"), ("/one/two,/four", "three")
-    ]
-    for t in templates:
-      var res = t.parseTemplateInOrder
-      check res.ok == true
       var constants, variables: seq[string]
       for seg in res.segments:
         if seg.kind == ConstantSegment:
@@ -84,7 +68,7 @@ suite "paths":
     for i, pat in paths.pairs:
       src = templates[i]
       par = src.parseTemplate
-      res = src.match(pat, par.constants, par.variables)
+      res = par.match(pat)
       check res == true
 
 suite "parser":
