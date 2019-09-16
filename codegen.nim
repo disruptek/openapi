@@ -23,11 +23,11 @@ type
     generator*: Generator
 
   ParameterIn* = enum
-    InQuery = "query"
-    InBody = "body"
-    InHeader = "header"
     InPath = "path"
+    InQuery = "query"
+    InHeader = "header"
     InData = "formData"
+    InBody = "body"
 
   DocType = enum Json, Native
 
