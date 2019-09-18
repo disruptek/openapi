@@ -677,7 +677,7 @@ proc namedParamDefs(op: Operation; forms: set[ParameterIn]): seq[NimNode] =
   ## produce a list of name/value parameters per each operation input
   # add required params first,
   for param in op.parameters:
-    # the use may want to skip this section
+    # the user may want to skip this section
     if param.location notin forms:
       continue
     if param.required:
@@ -695,7 +695,7 @@ proc namedParamDefs(op: Operation; forms: set[ParameterIn]): seq[NimNode] =
                                                default=param.default)
   # then add optional params
   for param in op.parameters:
-    # the use may want to skip this section
+    # the user may want to skip this section
     if param.location notin forms:
       continue
     if not param.required:
