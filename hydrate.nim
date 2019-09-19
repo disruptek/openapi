@@ -87,34 +87,3 @@ proc hydrateUri*(uri: Uri; values: HydrateInputs): Option[Uri] =
   success.path = path.get
   success.hostname = host.get
   result = some(success)
-
-when isMainModule:
-  import unittest
-
-  suite "hydration":
-    setup:
-      let
-        values = %* {
-          "region": "us-east-1",
-          "a bool": true,
-          "an int": 42,
-          "none": nil,
-        }
-
-    test "hydrate template":
-      var wet: Option[string]
-      wet = "sqs.{region}.amazonaws.com".hydrateTemplate(values)
-      check wet.isSome
-      check wet.get == "sqs.us-east-1.amazonaws.com"
-      wet = "sqs.{a bool}.amazonaws.com".hydrateTemplate(values)
-      check wet.isSome
-      check wet.get == "sqs.true.amazonaws.com"
-      wet = "sqs.{an int}.amazonaws.com".hydrateTemplate(values)
-      check wet.isSome
-      check wet.get == "sqs.42.amazonaws.com"
-      wet = "sqs.{none}.amazonaws.com".hydrateTemplate(values)
-      check wet.isSome
-      check wet.get == "sqs..amazonaws.com"
-      wet = "sqs.{none}{an int}.{a bool}.amazonaws.com".hydrateTemplate(values)
-      check wet.isSome
-      check wet.get == "sqs.42.true.amazonaws.com"
