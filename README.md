@@ -77,4 +77,4 @@ In any case, the inputs will be validated according to the API definition and on
 - APIs we consume https://github.com/APIs-guru/openapi-directory/blob/master/APIs
 - Schema v2 https://swagger.io/specification/v2
 - Schema v3 https://swagger.io/specification (not yet supported)
-- Amazon Web Services Signature Version 4 https://github.com/disruptek/sigv4
+- Amazon Web Services APIs in Nim https://github.com/disruptek/atoz
