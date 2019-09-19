@@ -280,6 +280,9 @@ proc guessType*(js: JsonNode; root: JsonNode): Option[GuessTypeResult] =
       major = "object"
     elif "type" in input:
       major = input["type"].getStr
+      if major == "string" and "enum" in input:
+        if input["enum"].kind == JArray and input["enum"].len > 0:
+          format = "enum"
     elif "schema" in input:
       return input["schema"].guessType(root)
     else:
