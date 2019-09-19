@@ -41,9 +41,23 @@ else:
 
 ## Theory
 
+### Why output Nim source at all?
+
+1. Parsing the API schema and generating the code isn't terribly fast when performed at compile-time, so saving the source allows us to cache that work product to dramatically speed up compilation of an application which actually uses the resultant API and is likely being recompiled more often than the API schema is changing.
+
+1. Eventually, this library will, by default, generate an API which has no third-party module requirements.  We aren't quite there yet, simply because we provide some minor quality-of-life shimming of the HTTP client.
+
+1. Without source text, many forms of tooling (documentation, editor plug-ins, etc.) have needless hoops to jump through, if they work at all.
+
+1. Adding generated code to source control lets us keep track of changes there which are no less critical than changes we might otherwise introduce manually elsewhere.
+
+### Why 
+
 The quality of OpenAPI definitions in the wild appears to vary, uh, wildly.  This code attempts to progressively define greater support for the API it receives as input whenever possible.  Hindrances to this goal include name clashes, invalid `$ref`erences, unspecified types, invalid identifiers, ambiguous schemas, and so on.
 
-You get a type defined per each operation defined in the API, and an exported instance of that type which is named according to the API's `operationId` specification.  These types allow you to perform trivial overrides or recomposition of generated values such as the `host`, `basePath`, or input validation and URL generation procedures.
+Our approach is to try to provide the most natural interface possible for the largest portion of the API we can.
+
+You get a type defined per each operation defined in the API, and an exported instance of that type which is named according to the API's `operationId` specification.  These types allow you to perform trivial overrides or recomposition of generated values such as the `host` and `basePath`, or provide your own tweaks input validation and URL generation procedures.
 
 ## Requests
 The `call` procedure returns a `Recallable` object which holds details associated with a request which may be reissued.  This proc comes in two flavors:
