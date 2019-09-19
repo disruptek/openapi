@@ -1102,8 +1102,8 @@ proc preamble(oac: NimNode): NimNode =
 
     proc `createP`[`T`: `oac`](`tP`: `T`): `T` {.used.} =
       result = T(name: `tP`.name, meth: `tP`.meth, host: `tP`.host,
-                 route: `tP`.route, validator: `tP`.validator,
-                 url: `tP`.url)
+                 base: `tP`.base, route: `tP`.route, schemes: `tP`.schemes,
+                 validator: `tP`.validator, url: `tP`.url)
 
     proc pickScheme(`tP`: `oac`): Option[Scheme] {.used.} =
       ## select a supported scheme from a set of candidates
