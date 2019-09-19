@@ -4,9 +4,9 @@ import strutils
 import options
 import json
 
-import paths
-import parser
-import hydrate
+import openapi/paths
+import openapi/parser
+import openapi/hydrate
 
 
 let logger = newConsoleLogger(useStderr=true)
