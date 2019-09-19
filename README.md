@@ -51,7 +51,7 @@ else:
 
 1. Adding generated code to source control lets us keep track of changes there which are no less critical than changes we might otherwise introduce manually elsewhere.
 
-### Why 
+### Why is the resultant API so noisy?
 
 The quality of OpenAPI definitions in the wild appears to vary, uh, wildly.  This code attempts to progressively define greater support for the API it receives as input whenever possible.  Hindrances to this goal include name clashes, invalid `$ref`erences, unspecified types, invalid identifiers, ambiguous schemas, and so on.
 
