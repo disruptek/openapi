@@ -71,6 +71,27 @@ type
     recallable*: NimNode
     forms*: set[ParameterIn]
 
+proc guessDefault(kind: GuessTypeResult; root: JsonNode; input: JsonNode): JsonNode =
+  assert input != nil, "unable to guess type for nil json node"
+  result = input.getOrDefault("default")
+  if result == nil:
+    if kind.minor == "enum" and "enum" in input:
+      assert input["enum"].kind == JArray and input["enum"].len > 0
+      result = input["enum"][0]
+  if result != nil:
+    var target = root.pluckRefJson(result)
+    if target != nil:
+      result = target
+
+proc requiresPassedInput(param: Parameter): bool =
+  ## determine if the parameter may will require passed input
+  result = param.required and param.default == nil
+
+proc shortRepr(js: JsonNode): string =
+  ## render a JInt(3) as "JInt(3)"; will puke on arrays/objects/null
+  assert js.kind in {JNull, JBool, JInt, JFloat, JString}
+  result = $js.kind & "(" & $js & ")"
+
 proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   ## instantiate a new parameter from a JsonNode schema
   assert input != nil and input.kind == JObject, "bizarre input: " &
@@ -91,7 +112,17 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   result.required = js.getOrDefault("required").getBool
   if documentation.isSome:
     result.description = documentation.get()
-  result.default = js.getOrDefault("default")
+  result.default = kind.get.guessDefault(root, js)
+
+  if result.default != nil:
+    var defkind = result.default.guessType(root)
+    if defkind.isNone:
+      warning "unknown type for default value of " & $result
+      result.default = nil
+    elif defkind.get.major != kind.get.major:
+      warning $kind.get.major & " parameter `" & $result & "` has default of " &
+        result.default.shortRepr & "; omitting code to supply the default"
+      result.default = nil
 
   # `source` is a pointer to the JsonNode that defines the
   # format for the parameter; it can be overridden with `schema`
@@ -291,20 +322,23 @@ proc toJsonParameter(name: NimNode; required: bool): NimNode =
   else:
     result = newIdentDefs(name, ident"JsonNode", newNilLit())
 
-proc shortRepr(js: JsonNode): string =
-  ## render a JInt(3) as "JInt(3)"; will puke on arrays/objects/null
-  assert js.kind in {JNull, JBool, JInt, JFloat, JString}
-  result = $js.kind & "(" & $js & ")"
-
 proc toNativeParameter(name: NimNode; kind: JsonNodeKind; required: bool; default: JsonNode = nil): NimNode =
   ## create the right-hand side of a native typedef for the given parameter
-  if required:
-    return newIdentDefs(name, kind.toNimNode)
+
+  # if we've previously established a default, ie. because one was
+  # supplied as such or we've inferred the default value for a param,
+  # eg. because it's the first value of an enum...
   if default != nil:
+    # make sure that we don't have an obvious type clash
     if default.kind == kind:
       return newIdentDefs(name, kind.toNimNode, default.getLiteral)
     warning $kind & " parameter `" & $name & "` has default of " &
       default.shortRepr & "; omitting code to supply the default"
+  # if it's required or the default was of the wrong kind, then err
+  # on the side of requiring a value to be passed to the argument.
+  if required or default != nil:
+    return newIdentDefs(name, kind.toNimNode)
+  # otherwise, default it to a default value for the native type
   result = newIdentDefs(name, kind.toNimNode, kind.getLiteral)
 
 proc toNewJsonNimNode(js: JsonNode): NimNode =
@@ -680,7 +714,7 @@ proc namedParamDefs(op: Operation; forms: set[ParameterIn]): seq[NimNode] =
     # the user may want to skip this section
     if param.location notin forms:
       continue
-    if param.required:
+    if param.requiresPassedInput:
       var
         sane = param.saneName
         saneIdent = sane.stropIfNecessary
@@ -698,7 +732,7 @@ proc namedParamDefs(op: Operation; forms: set[ParameterIn]): seq[NimNode] =
     # the user may want to skip this section
     if param.location notin forms:
       continue
-    if not param.required:
+    if not param.requiresPassedInput:
       var
         sane = param.saneName
         saneIdent = sane.stropIfNecessary
