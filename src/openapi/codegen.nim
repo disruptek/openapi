@@ -111,7 +111,7 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   result.location = parseEnum[ParameterIn](js["in"].getStr)
   result.required = js.getOrDefault("required").getBool
   if documentation.isSome:
-    result.description = documentation.get()
+    result.description = documentation.get
   result.default = kind.get.guessDefault(root, js)
 
   if result.default != nil:
@@ -195,7 +195,7 @@ proc saneName(param: Parameter): string =
   let id = sanitizeIdentifier(param.name, capsOkay=true)
   if id.isNone:
     error "unable to compose valid identifier for parameter `" & param.name & "`"
-  result = id.get()
+  result = id.get
 
 proc saneName(op: Operation): string =
   ## produce a safe identifier for the given operation
@@ -208,7 +208,7 @@ proc saneName(op: Operation): string =
   for name in attempt:
     var id = sanitizeIdentifier(name, capsOkay=false)
     if id.isSome:
-      return id.get()
+      return id.get
   error "unable to compose valid identifier; attempted these: " & attempt.repr
 
 proc `$`*(path: PathItem): string =
@@ -392,12 +392,12 @@ proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
     if param.kind.isNone:
       warning "unable to parse default value for parameter `" & sane &
       "`:\n" & param.js.pretty
-    elif param.kind.get().major == param.default.kind:
+    elif param.kind.get.major == param.default.kind:
       useDefault = true
     else:
       # provide a warning if the default type doesn't match the input
       warning "`" & sane & "` parameter in `" & $op &
-        "` is " & $param.kind.get().major & " but the default is " &
+        "` is " & $param.kind.get.major & " but the default is " &
         param.default.shortRepr & "; omitting code to supply the default"
 
   if useDefault:
@@ -420,9 +420,9 @@ proc documentation(p: Parameter; form: DocType; root: JsonNode; name=""): NimNod
   else:
     case form:
     of Json:
-      docs &= $p.kind.get().major
+      docs &= $p.kind.get.major
     of Native:
-      docs &= $p.kind.get().major.toNimNode
+      docs &= $p.kind.get.major.toNimNode
   if p.required:
     docs &= " (required)"
   if p.description != "":
@@ -465,7 +465,7 @@ proc maybeAddExternalDocs(node: var NimNode; js: JsonNode) =
   for field in ["description", "url"]:
     var comment = js["externalDocs"].pluckString(field)
     if comment.isSome:
-      node.add newCommentStmtNode(comment.get())
+      node.add newCommentStmtNode(comment.get)
 
 proc maybeDeprecate(name: NimNode; params: seq[NimNode]; body: NimNode;
                     deprecate: bool): NimNode =
@@ -485,7 +485,7 @@ proc get(parameters: Parameters; location: ParameterIn; name: string; mode: Stri
   if mode == modeStyleInsensitive:
     let sanitized = name.sanitizeIdentifier
     if sanitized.isSome:
-      sane = sanitized.get()
+      sane = sanitized.get
     else:
       warning "unable to sanitize parameter name `" & name & "`"
       return
@@ -499,7 +499,7 @@ proc get(parameters: Parameters; location: ParameterIn; name: string; mode: Stri
         return some(param)
     of modeStyleInsensitive:
       var saneparam = param.name.sanitizeIdentifier
-      if saneparam.isSome and saneparam.get() == sane:
+      if saneparam.isSome and saneparam.get == sane:
         return some(param)
 
 proc makeUrl(path: PathItem; op: Operation): NimNode =
@@ -557,7 +557,7 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
     body.add quote do:
       if `hydrated`.isNone:
         raise newException(ValueError, "unable to fully hydrate path")
-      result = $`protocol` & "://" & `host` & `base` & `hydrated`.get()
+      result = $`protocol` & "://" & `host` & `base` & `hydrated`.get
 
   var params = @[ident"string"]
   params.add newIdentDefs(protocol, ident"Scheme")
@@ -683,7 +683,7 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
             msg &= " due to required `" & param.name & "` field"
           body.add quote do:
             assert `locIdent` != nil, `msg`
-      body.add param.sectionParameter(param.kind.get().major, section, default=default)
+      body.add param.sectionParameter(param.kind.get.major, section, default=default)
 
     if location == InBody:
       # just leave the body out if it's undefined (as a signal)
@@ -704,7 +704,7 @@ proc usesJsonWhenNative(param: Parameter): bool =
   ## simple test to see if a parameter should use a json type
   if param.location == InBody:
     result = true
-  elif param.kind.get().major notin {JBool, JInt, JFloat, JString}:
+  elif param.kind.get.major notin {JBool, JInt, JFloat, JString}:
     result = true
 
 proc namedParamDefs(op: Operation; forms: set[ParameterIn]): seq[NimNode] =
@@ -718,7 +718,7 @@ proc namedParamDefs(op: Operation; forms: set[ParameterIn]): seq[NimNode] =
       var
         sane = param.saneName
         saneIdent = sane.stropIfNecessary
-        major = param.kind.get().major
+        major = param.kind.get.major
       if param.usesJsonWhenNative:
         if major == JNull:
           warning $param & " is a required JNull; we'll insert it later..."
@@ -736,7 +736,7 @@ proc namedParamDefs(op: Operation; forms: set[ParameterIn]): seq[NimNode] =
       var
         sane = param.saneName
         saneIdent = sane.stropIfNecessary
-        major = param.kind.get().major
+        major = param.kind.get.major
       if param.usesJsonWhenNative:
         result.add saneIdent.toJsonParameter(param.required)
       else:
@@ -803,7 +803,7 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
     if param.kind.isNone:
       warning "failure to infer type for parameter " & $param
       return
-    errmsg = "expected " & $param.kind.get().major & " for `" & sane & "` but received "
+    errmsg = "expected " & $param.kind.get.major & " for `" & sane & "` but received "
     for clash in op.parameters.nameClashes(param):
       warning "identifier clash in proc arguments: " & $clash.location &
         "-`" & clash.name & "` versus " & $param.location & "-`" &
@@ -819,7 +819,7 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
           if `saneIdent` != nil:
             `section`.add `insane`, `saneIdent`
     else:
-      var rhs = param.kind.get().major.instantiateWithDefault(saneIdent)
+      var rhs = param.kind.get.major.instantiateWithDefault(saneIdent)
       body.add newCall(ident"add", section, newStrLitNode(insane), rhs)
 
   body.add newAssignment(output, validatorCall)
@@ -871,7 +871,7 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
     documentation = input.pluckString("description")
   result = Operation(ok: false, meth: meth, path: path, js: js)
   if documentation.isSome:
-    result.description = documentation.get()
+    result.description = documentation.get
   result.operationId = js.getOrDefault("operationId").getStr
   if result.operationId == "":
     var msg = "operationId not defined for " & toUpperAscii($meth)
@@ -902,14 +902,14 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   for parameter in path.parameters:
     var badadd = result.parameters.safeAdd(parameter, sane)
     if badadd.isSome:
-      warning badadd.get()
+      warning badadd.get
       result.parameters.add parameter
   # parameters for this particular http method
   if "parameters" in js:
     for parameter in root.readParameters(js["parameters"]):
       var badadd = result.parameters.safeAdd(parameter, sane)
       if badadd.isSome:
-        warning badadd.get()
+        warning badadd.get
         result.parameters.add parameter
 
   result.ast = newStmtList()
@@ -927,19 +927,19 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
   if validator.isNone:
     warning "unable to compose validator for `" & sane & "`"
     return
-  result.ast.add validator.get()
+  result.ast.add validator.get
 
   # if we don't have locations, we cannot support the operation at all
   let locations = generator.makeCallWithLocationInputs(result)
   if locations.isNone:
     warning "unable to compose call for `" & sane & "`"
     return
-  result.ast.add locations.get()
+  result.ast.add locations.get
 
   # we use the call type to make our call() operation with named args
   let namedArgs = generator.makeCallWithNamedArguments(result)
   if namedArgs.isSome:
-    result.ast.add namedArgs.get()
+    result.ast.add namedArgs.get
 
   # finally, add the call variable that the user hooks to
   result.ast.add path.generator.makeCallVar(path, result)
@@ -1162,7 +1162,7 @@ proc hydratePath(input: JsonNode; segments: seq[PathToken]): Option[string] =
   var remainder = input.hydratePath(segments[1..^1])
   if remainder.isNone:
     return
-  result = some(head & remainder.get())
+  result = some(head & remainder.get)
   """
   when false:
     result.add parseStmt """
