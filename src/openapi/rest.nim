@@ -332,7 +332,7 @@ when isMainModule:
 
     setup:
       var
-        call = TestCall()
+        call = TestCall(meth: HttpGet)
         rec = call.newRecallable(URL)
 
     teardown:
