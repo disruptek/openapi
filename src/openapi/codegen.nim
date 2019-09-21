@@ -830,15 +830,15 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
   params &= op.namedParamDefs(generator.forms)
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
-proc makeCallType(gen: Generator; path: PathItem; op: Operation): NimNode =
+proc makeCallType(generator: Generator; path: PathItem; op: Operation): NimNode =
   let
     saneType = op.typename
-    oac = path.generator.roottype
+    oac = generator.roottype
   result = quote do:
     type
       `saneType` = ref object of `oac`
 
-proc makeCallVar(gen: Generator; path: PathItem; op: Operation): NimNode =
+proc makeCallVar(generator: Generator; path: PathItem; op: Operation): NimNode =
   ## produce an instantiated call object for export
   let
     sane = op.saneName
@@ -851,7 +851,7 @@ proc makeCallVar(gen: Generator; path: PathItem; op: Operation): NimNode =
     base = path.basePath
     host = path.host
     route = path.path
-    schemes = gen.schemes.toNimNode
+    schemes = generator.schemes.toNimNode
 
   result = quote do:
     var `saneCall` = `saneType`(name: `sane`, meth: `methId`, host: `host`,
@@ -978,9 +978,9 @@ proc newPathItem(gen: Generator; path: string; input: JsonNode): PathItem =
     result.operations[$opName] = op
   result.ok = true
 
-iterator paths(gen: Generator; ftype: FieldTypeDef): PathItem =
+iterator paths(generator: Generator; ftype: FieldTypeDef): PathItem =
   ## yield path items found in the given node
-  let root = gen.js
+  let root = generator.js
   var
     schema: Schema
     pschema: Schema = nil
@@ -1018,7 +1018,7 @@ iterator paths(gen: Generator; ftype: FieldTypeDef): PathItem =
         if not k.toLower.startsWith("x-"):
           warning "unrecognized path: " & k
         continue
-      yield gen.newPathItem(k, v)
+      yield generator.newPathItem(k, v)
     break
 
 proc prefixedPluck(js: JsonNode; field: string; indent=0): string =
@@ -1203,7 +1203,7 @@ proc init*(generator: var Generator; content: string) =
 
   let pr = generator.schema.parseSchema(generator.js)
   if not pr.ok:
-    return
+    error "schema parse error: " & pr.msg
 
   # setup some imports we'll want so the user doesn't need to add them
   for module in ["json", "options", "hashes"]:
