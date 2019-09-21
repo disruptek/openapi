@@ -2,6 +2,7 @@ import json
 import options
 import uri
 
+import foreach
 import spec
 import paths
 
@@ -14,18 +15,18 @@ converter toHydrationInputs(input: JsonNode): seq[KeyVal] =
     return
   if input.kind != JObject:
     return
-  for kv in input.pairs:
+  foreach k, v in input.pairs of string and JsonNode:
     var value: string
-    case kv.val.kind:
+    case v.kind:
     of JString:
-      value = kv.val.getStr
+      value = v.getStr
     of JInt, JFloat, JBool:
-      value = $kv.val
+      value = $v
     of JNull:
       value = ""
     else:
-      raise newException(ValueError, "unable to render " & $kv.val.kind)
-    result.add (key: kv.key, val: value)
+      raise newException(ValueError, "unable to render " & $v.kind)
+    result.add (key: k, val: value)
 
 proc hydratePath(input: openarray[KeyVal]; segments: seq[PathToken]): Option[string] =
   ## reconstitute a path with constants and variable values from an openarray
@@ -37,7 +38,7 @@ proc hydratePath(input: openarray[KeyVal]; segments: seq[PathToken]): Option[str
   of ConstantSegment: discard
   of VariableSegment:
     block found:
-      for kv in input:
+      foreach kv in input.items of KeyVal:
         if head == kv.key:
           head = kv.val
           break found
@@ -59,13 +60,13 @@ proc hydrateTemplate*(path: string; values: openarray[KeyVal]): Option[string] =
 
   parsed = parseTemplate(path)
 
-  for segment in parsed.segments:
+  foreach segment in parsed.segments.items of PathToken:
     if segment.kind != VariableSegment:
       continue
     var
       msg = "path template references an unknown variable `" & $segment & "`"
     block found:
-      for kv in values:
+      foreach kv in values.items of KeyVal:
         if kv.key == $segment:
           break found
       raise newException(ValueError, msg)

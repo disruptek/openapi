@@ -10,6 +10,8 @@ import xmltree
 import logging
 import strutils
 
+import foreach
+
 export httpcore.HttpMethod, is2xx, is3xx, is4xx, is5xx
 
 type
@@ -64,9 +66,9 @@ type
 proc massageHeaders*(node: JsonNode): seq[KeyVal] =
   if node == nil or node.kind != JObject or node.len == 0:
     return
-  for kv in node.pairs:
-    assert kv.val.kind == JString
-    result.add (key: kv.key, val: kv.val.getStr)
+  foreach k, v in node.pairs of string and JsonNode:
+    assert v.kind == JString
+    result.add (key: k, val: v.getStr)
 
 iterator fibonacci*(start=0; stop=0): int {.raises: [].} =
   var
@@ -188,7 +190,7 @@ proc retried*(rec: Recallable; tries=5): AsyncResponse
   ## issue the call and return the response synchronously;
   ## raises in the event of a failure
   try:
-    for fib in fibonacci(0, tries):
+    foreach fib in fibonacci(0, tries) of int:
       result = waitfor rec.issueRequest()
       if result.code.is2xx:
         return
@@ -212,7 +214,7 @@ proc retry*(rec: Recallable; tries=5): Future[AsyncResponse]
   ## retry if the status code is 1XX, 3XX, or 5XX.
   var response: AsyncResponse
   try:
-    for fib in fibonacci(0, tries):
+    foreach fib in fibonacci(0, tries) of int:
       response = await rec.issueRequest()
       if response.code.is2xx:
         return response
@@ -237,7 +239,7 @@ iterator retried*(rec: Recallable; tries=5): AsyncResponse
   ## obviously, you can terminate early.
   var response: AsyncResponse
   try:
-    for fib in fibonacci(0, tries):
+    foreach fib in fibonacci(0, tries) of int:
       response = waitfor rec.issueRequest()
       yield response
       if response.code.is4xx:
@@ -278,28 +280,28 @@ proc errorFree*[T: RestCall](rec: Recallable; call: T; tries=5): Future[string]
       rec.took = getTime() - rec.began
       info $call & " total request " & $rec.took
 
-proc any*[T](futures: varargs[Future[T]]): Future[T]
+proc first*[T](futures: varargs[Future[T]]): Future[T]
   {.raises: [Defect, Exception].} =
-  ## wait for any of the input futures to complete; yield the value
+  ## wait for any of the input futures to complete; return the first
   assert futures.len != 0
   case futures.len:
-    of 0:
-      raise newException(Defect, "any called without futures")
-    of 1:
-      result = futures[futures.low]
-    else:
-      var future = newFuture[T]("any")
-      proc anycb[T](promise: Future[T])
-        {.raises: [Exception].} =
-        if future.finished:
-          return
-        if promise.failed:
-          future.fail(promise.error)
-        else:
-          future.complete(promise.read)
-      for vow in futures:
-        vow.addCallback anycb[T]
-      result = future
+  of 0:
+    raise newException(Defect, "first called without futures")
+  of 1:
+    result = futures[futures.low]
+  else:
+    var future = newFuture[T]("first")
+    proc anycb[T](promise: Future[T])
+      {.raises: [Exception].} =
+      if future.finished:
+        return
+      if promise.failed:
+        future.fail(promise.error)
+      else:
+        future.complete(promise.read)
+    foreach vow in futures.items of Future[T]:
+      vow.addCallback anycb[T]
+    result = future
 
 iterator ready*[T](futures: var PageFuturesSeq[T]; threads=0): T
   {.raises: [Exception]} =
@@ -311,11 +313,11 @@ iterator ready*[T](futures: var PageFuturesSeq[T]; threads=0): T
     if ready.len == 0:
       if futures.len <= threads:
         break
-      discard waitfor futures.any()
+      discard waitfor futures.first()
       continue
     else:
       debug "futures ready: " & $ready.len & " unready: " & $futures.len
-    for vow in ready:
+    foreach vow in ready of T:
       if vow.failed:
         raise vow.error
       yield vow
@@ -346,7 +348,7 @@ when isMainModule:
 
     test "retried via iteration":
       var text: string
-      for response in rec.retried(tries=5):
+      foreach response in rec.retried(tries=5) of AsyncResponse:
         if not response.code.is2xx:
           warn "retried " & $rec.retries & " took " & $rec.took
           continue

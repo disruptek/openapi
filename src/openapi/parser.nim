@@ -8,6 +8,7 @@ import sequtils
 when not defined(release):
   import strformat
 
+import foreach
 import spec
 import paths
 
@@ -70,8 +71,8 @@ proc match*(name: string; pattern: string): bool =
 
 proc parseField*(ftype: FieldTypeDef; js: JsonNode): ParserResult
 
-proc parsePair(js: JsonNode; name: FieldName;
-  ftype: FieldTypeDef; missing: var FieldHash): ParserResult =
+proc parsePair(js: JsonNode; name: FieldName; ftype: FieldTypeDef;
+               missing: var FieldHash): ParserResult =
   ## validate input given a key/value from a schema
   result = ParserResult(ok: true, input: js, key: name, ftype: ftype, child: nil)
   # identify regex name specifiers
@@ -79,7 +80,7 @@ proc parsePair(js: JsonNode; name: FieldName;
     assert not ftype.required, "regexp `" & name & "` required?"
     assert name.isRegexp, "i can't grok `" & name & "` as regexp"
     # examine missing keys from input, and
-    for key in missing.toSeq:
+    foreach key in missing.toSeq of string:
       # ignore any that don't match
       if not key.match(name):
         continue
@@ -97,7 +98,7 @@ proc parsePair(js: JsonNode; name: FieldName;
     var caught = name.parseTemplate
     if not caught.ok:
       return result.fail("bad template", key=name)
-    for key in missing.toSeq:
+    foreach key in missing.toSeq of string:
       # FIXME: are multiple templates ever valid?
       assert caught.match(key), "template doesn't match " & key
       missing.excl key
@@ -133,7 +134,7 @@ proc parseSchema*(schema: Schema; js: JsonNode): ParserResult =
 
   missing.init()
   # first iterate over input, and
-  for key, value in js.pairs:
+  foreach key, value in js.pairs of string and JsonNode:
     # note missing fields, or
     if key notin schema:
       missing.incl key
@@ -145,7 +146,7 @@ proc parseSchema*(schema: Schema; js: JsonNode): ParserResult =
       return result.fail(result.msg, key=key)
 
   # turning to the schema,
-  for name, ftype in schema.pairs:
+  foreach name, ftype in schema.pairs of string and FieldTypeDef:
     result = js.parsePair(name, ftype, missing)
     if not result.ok:
       return
@@ -168,7 +169,7 @@ proc parseField*(ftype: FieldTypeDef; js: JsonNode): ParserResult =
     if not result.ok:
       result = ftype.b.parseField(js)
   of List:
-    for j in js.elems:
+    foreach j in js.items of JsonNode:
       result = ftype.member.parseField(j)
       if not result.ok:
         break

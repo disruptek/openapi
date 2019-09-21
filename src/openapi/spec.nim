@@ -8,6 +8,8 @@ import hashes
 when not defined(release):
   import strformat
 
+import foreach
+
 export JsonNodeKind
 
 type
@@ -67,7 +69,7 @@ converter toNimNode*(scheme: Scheme): NimNode =
 
 converter toNimNode*(schemes: set[Scheme]): NimNode =
   result = newNimNode(nnkCurly)
-  for scheme in schemes:
+  foreach scheme in schemes.items of Scheme:
     result.add scheme.toNimNode
 
 proc hash*(scheme: Scheme): Hash =
@@ -146,7 +148,7 @@ converter toJsonNodeKind*(f: FieldTypeDef): JsonNodeKind =
     assert false, "nonsensical conversion of Either type"
   of Primitive:
     assert f.kinds.len == 1, "ambiguous types: " & $f.kinds
-    for n in f.kinds:
+    foreach n in f.kinds.items of JsonNodeKind:
       result = n
 
 converter toFieldTypeDef*(s: set[JsonNodeKind]): FieldTypeDef =
@@ -239,7 +241,7 @@ proc pluckRefJson*(root: JsonNode; input: JsonNode): JsonNode =
   while paths.len > 0 and paths[0] in ["", "#"]:
     paths = paths[1..^1]
   result = root
-  for p in paths:
+  foreach p in paths.items of string:
     if p notin result:
       warning "schema reference `" & target.get() & "` not found"
       return nil
@@ -299,7 +301,7 @@ proc guessType*(js: JsonNode; root: JsonNode): Option[GuessTypeResult] =
       elif "allOf" in input:
         major = "object"
         assert input["allOf"].kind == JArray
-        for n in input["allOf"]:
+        foreach n in input["allOf"].items of JsonNode:
           input = n
           break
       else:
@@ -377,7 +379,7 @@ converter toNimNode*(ftype: FieldTypeDef): NimNode =
       return newCommentStmtNode("missing type specification")
     if ftype.kinds.card != 1:
       return newCommentStmtNode("multiple types is too many")
-    for kind in ftype.kinds:
+    foreach kind in ftype.kinds.items of JsonNodeKind:
       return kind.toNimNode
   of List:
     assert ftype.member != nil
@@ -421,7 +423,7 @@ proc isValidNimIdentifier*(s: string): bool =
   if s.len > 0 and s[0] in IdentStartChars:
     if s.len > 1 and '_' in [s[0], s[^1]]:
       return false
-    for i in 1..s.len-1:
+    foreach i in 1..s.len-1 of int:
       if s[i] notin IdentChars:
         return false
       if s[i] == '_' and s[i-1] == '_':

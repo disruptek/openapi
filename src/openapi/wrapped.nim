@@ -3,6 +3,7 @@ import macros
 import json
 import strutils
 
+import foreach
 import spec
 import typewrap
 import paths
@@ -100,7 +101,7 @@ iterator objectProperties(input: JsonNode): NimNode =
   var onedef, typedef: NimNode
   if input != nil:
     assert input.kind == JObject, "nonsensical json type in objectProperties"
-    for k, v in input.pairs:
+    foreach k, v in input.pairs of string and JsonNode:
       if k == "$ref":
         continue
       # a single property typedef
@@ -112,12 +113,6 @@ iterator objectProperties(input: JsonNode): NimNode =
       onedef.add newEmptyNode()
       yield onedef
 
-proc contains[T](t: tuple; v: T): bool =
-  result = false
-  for n in t.fields:
-    if v == n:
-      return true
-
 proc defineMap(input: JsonNode): NimNode =
   ## reference an existing map type or create a new one right here
   var
@@ -126,10 +121,10 @@ proc defineMap(input: JsonNode): NimNode =
   assert input.kind == JObject
 
   let contents = (typed: "type" in input, refd: "$ref" in input)
-  if false notin contents:
+  if contents.typed and contents.refd:
     # we'll let the $ref override...
     target = input.pluckRefNode()
-  elif true notin contents:
+  elif not (contents.typed or contents.refd):
     # no type and no ref; use string
     target = newIdentNode("string")
   elif contents.refd:
@@ -158,7 +153,7 @@ proc defineObject(input: JsonNode): NimNode =
   result.add newEmptyNode()
   result.add newEmptyNode()
   reclist = newNimNode(nnkRecList)
-  for def in input.objectProperties:
+  foreach def in input.objectProperties of NimNode:
     if target != nil:
       warning "found a properties ref and 1+ props: " & def.strVal, result
       break
@@ -200,7 +195,7 @@ proc defineObjectOrMap(input: JsonNode): NimNode =
   elif "allOf" in input:
     warning "allOf support is terrible!"
     assert input["allOf"].kind == JArray
-    for n in input["allOf"]:
+    foreach n in input["allOf"].items of JsonNode:
       result = n.defineObjectOrMap()
       if result != nil:
         break
@@ -262,7 +257,7 @@ proc parseTypeDefOrRef(input: JsonNode): NimNode =
     elif "allOf" in input:
       warning "allOf poorly implemented!"
       assert input["allOf"].kind == JArray
-      for n in input["allOf"]:
+      foreach n in input["allOf"].items of JsonNode:
         return n.parseTypeDefOrRef()
     elif input.len == 0:
       # it's okay, it's an empty map {}
