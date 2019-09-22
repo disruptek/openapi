@@ -29,7 +29,16 @@ render myAPI:
   ## whatever you write here will be included in your API verbatim
   echo "service " & myService & " loaded"
 
+  # we might want to rewrite the path (for a particular call) for all
+  # clients of the API we're generating.  easy.
+  getLotteryDraw.base = "/v2/"
+
 # use the API...
+
+# maybe we want to change the server for this call in order to test or migrate
+# something, but only for this particular client app.  again, easy.
+getLotteryCountries.host = "some.other.host.tld"
+
 let
   request = getLotteryCountries.call()
   response = waitFor request.issueRequest()
