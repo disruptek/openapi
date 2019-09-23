@@ -175,11 +175,7 @@ proc issueRequest*(rec: Recallable): Future[AsyncResponse]
       rec.client.http.headers = rec.client.headers
     else:
       rec.client.http.headers = newHttpHeaders()
-    result = case rec.meth:
-      of HttpPost: rec.client.http.post(rec.url, body=rec.body)
-      of HttpGet: rec.client.http.get(rec.url)
-      else:
-        raise newException(AsyncError, "undefined http method: " & $rec.meth)
+    result = rec.client.http.request(rec.url, rec.meth, body=rec.body)
   except CatchableError as e:
     raise newException(AsyncError, e.msg)
   except Exception as e:
@@ -266,7 +262,7 @@ proc errorFree*[T: RestCall](rec: Recallable; call: T; tries=5): Future[string]
       response = await rec.retry(tries=limit)
       rec.took = getTime() - rec.began
       if not response.code.is2xx:
-        warn call & " failed after " & $rec.retries & " retries"
+        warn $call & " failed after " & $rec.retries & " retries"
         limit -= rec.retries
         continue
       return await response.body
@@ -280,7 +276,7 @@ proc errorFree*[T: RestCall](rec: Recallable; call: T; tries=5): Future[string]
       rec.took = getTime() - rec.began
       info $call & " total request " & $rec.took
 
-proc first*[T](futures: varargs[Future[T]]): Future[T]
+proc first*[T](futures: openarray[Future[T]]): Future[T]
   {.raises: [Defect, Exception].} =
   ## wait for any of the input futures to complete; return the first
   assert futures.len != 0
@@ -299,7 +295,7 @@ proc first*[T](futures: varargs[Future[T]]): Future[T]
         future.fail(promise.error)
       else:
         future.complete(promise.read)
-    foreach vow in futures.items of Future[T]:
+    for vow in futures.items:
       vow.addCallback anycb[T]
     result = future
 
@@ -313,11 +309,11 @@ iterator ready*[T](futures: var PageFuturesSeq[T]; threads=0): T
     if ready.len == 0:
       if futures.len <= threads:
         break
-      discard waitfor futures.first()
+      discard waitfor futures.first
       continue
     else:
       debug "futures ready: " & $ready.len & " unready: " & $futures.len
-    foreach vow in ready of T:
+    for vow in ready.items:
       if vow.failed:
         raise vow.error
       yield vow
