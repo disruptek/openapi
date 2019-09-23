@@ -69,6 +69,8 @@ type
     imports*: NimNode
     types*: NimNode
     recallable*: NimNode
+    hydratePath*: NimNode
+    queryString*: NimNode
     forms*: set[ParameterIn]
 
 proc guessDefault(kind: GuessTypeResult; root: JsonNode; input: JsonNode): JsonNode =
@@ -507,29 +509,36 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
   let
     name = op.urlname
     pathObj = ident"path"
+    queryObj = ident"query"
     hydrated = ident"hydrated"
-    hydrateProc = ident"hydratePath"
+    hydrateProc = path.generator.hydratePath
     route = ident"route"
     base = ident"base"
     host = ident"host"
     protocol = ident"protocol"
-    nillable = not path.path.isTemplate
     bracket = newNimNode(nnkBracket)
+    inputs = newCall(path.generator.queryString, queryObj)
   var
     body = newStmtList()
 
-  if nillable:
+  body.add quote do:
+    result.scheme = $`protocol`
+    result.hostname = `host`
+    result.query = $`inputs`
+
+  if not path.path.isTemplate:
     # the path doesn't take take any variables; warn if the schema does
     for param in op.parameters.forLocation(InPath):
       assert false, $op & " has param " & $param & " but path isn't a template"
     body.add quote do:
-      result = $`protocol` & "://" & `host` & `base` & `route`
+      result.path = `base` & `route`
   else:
     let
       parsed = path.path.parseTemplate
       segments = ident"segments"
-    body.add quote do:
-      assert `pathObj` != nil, "path is required to populate template"
+    if path.path.isTemplate:
+      body.add quote do:
+        assert `pathObj` != nil, "path is required to populate template"
 
     # add some assertions
     for segment in parsed.segments:
@@ -557,14 +566,15 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
     body.add quote do:
       if `hydrated`.isNone:
         raise newException(ValueError, "unable to fully hydrate path")
-      result = $`protocol` & "://" & `host` & `base` & `hydrated`.get
+      result.path = `base` & `hydrated`.get
 
-  var params = @[ident"string"]
+  var params = @[ident"Uri"]
   params.add newIdentDefs(protocol, ident"Scheme")
   params.add newIdentDefs(host, ident"string")
   params.add newIdentDefs(base, ident"string")
   params.add newIdentDefs(route, ident"string")
   params.add newIdentDefs(pathObj, ident"JsonNode")
+  params.add newIdentDefs(queryObj, ident"JsonNode")
   result = newProc(name, params, body)
 
 proc locationParamDefs(op: Operation; nillable: bool): seq[NimNode] =
@@ -606,6 +616,8 @@ proc makeCallWithLocationInputs(generator: var Generator; op: Operation): Option
     protocol = newDotExpr(scheme, ident"get")
     path = newCall(newDotExpr(validIdent, ident"getOrDefault"),
                    newStrLitNode("path"))
+    query = newCall(newDotExpr(validIdent, ident"getOrDefault"),
+                   newStrLitNode("query"))
   if InBody in op.parameters.forms:
     content = newCall(newDotExpr(validIdent, ident"getOrDefault"),
                                  newStrLitNode("body"))
@@ -617,7 +629,7 @@ proc makeCallWithLocationInputs(generator: var Generator; op: Operation): Option
     if `scheme`.isNone:
       raise newException(IOError, "unable to find a supported scheme")
   body.add newLetStmt(ident"url", newCall(urlProc, protocol, urlHost,
-                                          urlBase, urlRoute, path))
+                                          urlBase, urlRoute, path, query))
   let heads = newCall(newDotExpr(validIdent,
                                  ident"getOrDefault"),
                       newStrLitNode("header"))
@@ -1091,7 +1103,7 @@ proc preamble(oac: NimNode): NimNode =
         host*: string
         schemes*: set[Scheme]
         url*: proc (`protoP`: Scheme; `hostP`: string; `baseP`: string;
-                    `routeP`: string; `pathP`: JsonNode): string
+                    `routeP`: string; `pathP`: JsonNode; `queryP`: JsonNode): Uri
 
       # this gives the user a type to hook into for code in their macro
       `oac` = ref object of `oarcP`
@@ -1144,6 +1156,14 @@ type
     value: string
   """
   result.add parseStmt """
+proc queryString(query: JsonNode): string =
+  var qs: seq[KeyVal]
+  if query == nil:
+    return ""
+  for k, v in query.pairs:
+    qs.add (key: k, val: v.getStr)
+  result = encodeQuery(qs)
+
 proc hydratePath(input: JsonNode; segments: seq[PathToken]): Option[string] =
   ## reconstitute a path with constants and variable values taken from json
   var head: string
@@ -1179,13 +1199,16 @@ proc newGenerator*(inputfn: string; outputfn: string): Generator {.compileTime.}
   result = Generator(ok: false, inputfn: inputfn, outputfn: outputfn)
   result.ast = newStmtList()
   result.imports = newNimNode(nnkImportStmt)
+  result.hydratePath = ident"hydratePath"
+  result.queryString = ident"queryString"
   for location in ParameterIn.low .. ParameterIn.high:
     result.forms.incl location
 
 proc init*(generator: var Generator; content: string) =
   ## initialize a generator with a string holding the json api input
   try:
-    generator.js = content.parseJson()
+    if generator.js == nil:
+      generator.js = content.parseJson()
     if generator.js.kind != JObject:
       error "i was expecting a json object, but i got " &
         $generator.js.kind
@@ -1206,7 +1229,8 @@ proc init*(generator: var Generator; content: string) =
     error "schema parse error: " & pr.msg
 
   # setup some imports we'll want so the user doesn't need to add them
-  for module in ["json", "options", "hashes"]:
+  for module in ["json", "options", "hashes", "uri"]:
+    # FIXME: check to prevent dupes
     generator.imports.add newIdentNode(module)
 
   # add the preface so we're ready for the user to add code
@@ -1237,7 +1261,7 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
     let hookP = generator.recallable
     var params = @[ident"Recallable"]
     params.add newIdentDefs(ident"call", ident"OpenApiRestCall")
-    params.add newIdentDefs(ident"url", ident"string")
+    params.add newIdentDefs(ident"url", ident"Uri")
     params.add newIdentDefs(ident"input", ident"JsonNode")
     var pragmas = newNimNode(nnkPragma)
     pragmas.add ident"base"
