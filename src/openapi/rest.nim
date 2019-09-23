@@ -9,6 +9,7 @@ import json
 import xmltree
 import logging
 import strutils
+import uri
 
 import foreach
 
@@ -105,12 +106,12 @@ proc newRestClient*(): RestClient =
   new result
   result.initRestClient()
 
-method newRecallable*(call: RestCall; url: string; headers: HttpHeaders;
+method newRecallable*(call: RestCall; url: Uri; headers: HttpHeaders;
                       body: string): Recallable
   {.base,raises: [Exception].} =
   ## make a new HTTP request that we can reissue if desired
   new result
-  result.url = url
+  result.url = $url
   result.retries = 0
   result.body = body
   #
@@ -125,14 +126,20 @@ method newRecallable*(call: RestCall; url: string; headers: HttpHeaders;
   result.client.http.headers = result.headers
   result.meth = call.meth
 
-method newRecallable*(call: RestCall; url: string; headers: openArray[KeyVal];
+method newRecallable*(call: RestCall; url: string; headers: HttpHeaders;
+                      body: string): Recallable
+  {.base,raises: [Exception].} =
+  ## make a new HTTP request that we can reissue if desired
+  result = newRecallable(call, url.parseUri, headers, body)
+
+method newRecallable*(call: RestCall; url: Uri; headers: openArray[KeyVal];
                       body: string): Recallable
   {.base,raises: [Exception].} =
   ## make a new HTTP request that we can reissue if desired
   let heads = newHttpHeaders(headers)
   result = newRecallable(call, url, heads, body)
 
-method newRecallable*(call: RestCall; url: string; headers: JsonNode;
+method newRecallable*(call: RestCall; url: Uri; headers: JsonNode;
                       body: JsonNode): Recallable
   {.base,raises: [Exception].} =
   ## make a new HTTP request that we can reissue if desired
@@ -144,7 +151,7 @@ method newRecallable*(call: RestCall; url: string; headers: JsonNode;
     toUgly(content, body)
   result = newRecallable(call, url, heads, content)
 
-method newRecallable*(call: RestCall; url: string; input: JsonNode): Recallable
+method newRecallable*(call: RestCall; url: Uri; input: JsonNode): Recallable
   {.base,raises: [Exception].} =
   ## make a new HTTP request that we can reissue if desired
   let
@@ -152,7 +159,7 @@ method newRecallable*(call: RestCall; url: string; input: JsonNode): Recallable
     body = input.getOrDefault("body")
   result = newRecallable(call, url, heads, body)
 
-method newRecallable*(call: RestCall; url: string): Recallable
+method newRecallable*(call: RestCall; url: Uri): Recallable
   {.base,raises: [Exception].} =
   ## make a new HTTP request that we can reissue if desired
   result = newRecallable(call, url, newHttpHeaders(), "")
@@ -169,9 +176,9 @@ proc issueRequest*(rec: Recallable): Future[AsyncResponse]
     #
     # FIXME move this header-fu into something restClient-specific
     #
-    if rec.headers.isEmpty:
+    if not rec.headers.isEmpty:
       rec.client.http.headers = rec.headers
-    elif rec.client.headers.isEmpty:
+    elif not rec.client.headers.isEmpty:
       rec.client.http.headers = rec.client.headers
     else:
       rec.client.http.headers = newHttpHeaders()
@@ -332,7 +339,7 @@ when isMainModule:
     setup:
       var
         call = TestCall(meth: HttpGet)
-        rec = call.newRecallable(URL)
+        rec = call.newRecallable(URL.parseUri)
 
     teardown:
       notice "(latency of below test)"
