@@ -164,6 +164,13 @@ method newRecallable*(call: RestCall; url: Uri): Recallable
   ## make a new HTTP request that we can reissue if desired
   result = newRecallable(call, url, newHttpHeaders(), "")
 
+# a hack to work around nim 0.20 -> 1.0 interface change
+template isEmptyAnyVersion(h: HttpHeaders): bool =
+  when compiles(h.isEmpty):
+    h.isEmpty
+  else:
+    h == nil
+
 proc issueRequest*(rec: Recallable): Future[AsyncResponse]
   {.raises: [AsyncError].} =
   ## submit a request and store some metrics
@@ -176,9 +183,9 @@ proc issueRequest*(rec: Recallable): Future[AsyncResponse]
     #
     # FIXME move this header-fu into something restClient-specific
     #
-    if not rec.headers.isEmpty:
+    if not rec.headers.isEmptyAnyVersion:
       rec.client.http.headers = rec.headers
-    elif not rec.client.headers.isEmpty:
+    elif not rec.client.headers.isEmptyAnyVersion:
       rec.client.http.headers = rec.client.headers
     else:
       rec.client.http.headers = newHttpHeaders()
