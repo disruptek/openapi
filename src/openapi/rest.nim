@@ -169,9 +169,9 @@ proc issueRequest*(rec: Recallable): Future[AsyncResponse]
     #
     # FIXME move this header-fu into something restClient-specific
     #
-    if rec.headers != nil:
+    if rec.headers.isEmpty:
       rec.client.http.headers = rec.headers
-    elif rec.client.headers != nil:
+    elif rec.client.headers.isEmpty:
       rec.client.http.headers = rec.client.headers
     else:
       rec.client.http.headers = newHttpHeaders()
