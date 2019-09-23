@@ -181,7 +181,7 @@ proc issueRequest*(rec: Recallable): Future[AsyncResponse]
   except Exception as e:
     raise newException(AsyncError, e.msg)
 
-proc retried*(rec: Recallable; tries=5): AsyncResponse
+proc retried*(rec: Recallable; tries=5; ms=1000): AsyncResponse
   {.raises: [RestError].} =
   ## issue the call and return the response synchronously;
   ## raises in the event of a failure
@@ -194,7 +194,7 @@ proc retried*(rec: Recallable; tries=5): AsyncResponse
         error waitfor result.body
         raise newException(CallRequestError, result.status)
       warn $result.status & "; sleeping " & $fib & " secs and retrying..."
-      sleep fib * 1000
+      sleep fib * ms
       rec.retries.inc
   except RestError as e:
     raise e
@@ -204,7 +204,7 @@ proc retried*(rec: Recallable; tries=5): AsyncResponse
     raise newException(AsyncError, e.msg)
   raise newException(RetriesExhausted, "Exhausted " & $tries & " retries")
 
-proc retry*(rec: Recallable; tries=5): Future[AsyncResponse]
+proc retry*(rec: Recallable; tries=5; ms=1000): Future[AsyncResponse]
   {.async.} =
   ## try to issue the call and return the response; only
   ## retry if the status code is 1XX, 3XX, or 5XX.
@@ -217,7 +217,7 @@ proc retry*(rec: Recallable; tries=5): Future[AsyncResponse]
       if response.code.is4xx:
         raise newException(CallRequestError, response.status)
       warn $response.status & "; sleeping " & $fib & " secs and retrying..."
-      await sleepAsync(fib * 1000)
+      await sleepAsync(fib * ms)
       rec.retries.inc
   except RestError as e:
     raise e
@@ -228,7 +228,7 @@ proc retry*(rec: Recallable; tries=5): Future[AsyncResponse]
   if true:
     raise newException(RetriesExhausted, "Exhausted " & $tries & " retries")
 
-iterator retried*(rec: Recallable; tries=5): AsyncResponse
+iterator retried*(rec: Recallable; tries=5; ms=1000): AsyncResponse
   {.raises: [RestError].} =
   ## synchronously do something every time the response comes back;
   ## the iterator does not terminate if the request was successful;
@@ -241,7 +241,7 @@ iterator retried*(rec: Recallable; tries=5): AsyncResponse
       if response.code.is4xx:
         raise newException(CallRequestError, response.status)
       warn $response.status & "; sleeping " & $fib & " secs and retrying..."
-      sleep(fib * 1000)
+      sleep(fib * ms)
       rec.retries.inc
   except RestError as e:
     raise e
@@ -250,7 +250,8 @@ iterator retried*(rec: Recallable; tries=5): AsyncResponse
   except Exception as e:
     raise newException(AsyncError, e.msg)
 
-proc errorFree*[T: RestCall](rec: Recallable; call: T; tries=5): Future[string]
+proc errorFree*[T: RestCall](rec: Recallable; call: T; tries=5; ms=1000):
+  Future[string]
   {.async.} =
   ## issue and re-issue a recallable until it yields a response
   var
@@ -259,7 +260,7 @@ proc errorFree*[T: RestCall](rec: Recallable; call: T; tries=5): Future[string]
     limit = tries
   while true:
     try:
-      response = await rec.retry(tries=limit)
+      response = await rec.retry(tries=limit, ms=ms)
       rec.took = getTime() - rec.began
       if not response.code.is2xx:
         warn $call & " failed after " & $rec.retries & " retries"
