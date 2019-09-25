@@ -17,8 +17,8 @@ type
 
   WrappedField* = WrappedType[FieldTypeDef, WrappedItem]
   WrappedItem* = ref object
-    name: string  ## this is necessarily the WrappedType.name
-    case kind: FieldType
+    name*: string  ## this is necessarily the WrappedType.name
+    case kind*: FieldType
     of Primitive:
       primitive: JsonNode
     of List:
@@ -33,6 +33,12 @@ type
 proc makeTypeDef*(ftype: FieldTypeDef; name: string; input: JsonNode = nil): TypeDefResult
 proc parseTypeDef(input: JsonNode): FieldTypeDef
 proc parseTypeDefOrRef(input: JsonNode): NimNode
+
+proc `$`*(wrapped: WrappedItem): string =
+  if wrapped == nil:
+    result = "{nil WrappedItem}"
+  else:
+    result = $wrapped.kind & "/" & wrapped.name
 
 proc newWrappedPrimitive(ftype: FieldTypeDef, name: string; js: JsonNode): WrappedItem =
   ## a wrapped item that points to a primitive

@@ -12,6 +12,12 @@ import paths
 
 from schema2 import OpenApi2
 
+const MAKETYPES = false
+when MAKETYPES:
+  import typewrap
+  import wrapped
+  import sequtils
+
 type
   PathItem = object of ConsumeResult
     path*: string
@@ -71,6 +77,7 @@ type
     recallable*: NimNode
     hydratePath*: NimNode
     queryString*: NimNode
+    makeTypes: NimNode
     forms*: set[ParameterIn]
 
 proc guessDefault(kind: GuessTypeResult; root: JsonNode; input: JsonNode): JsonNode =
@@ -1245,7 +1252,7 @@ proc init*(generator: var Generator; content: string) =
 proc consume*(generator: var Generator; content: string) {.compileTime.} =
   ## parse a string which might hold an openapi definition
 
-  when false:
+  when MAKETYPES:
     var
       parsed: ParserResult
       schema: FieldTypeDef
@@ -1269,7 +1276,7 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
       body = newEmptyNode(), procType = nnkMethodDef, pragmas = pragmas)
 
   while true:
-    when false:
+    when MAKETYPES:
       tree = newBranch[FieldTypeDef, WrappedItem](anything({}), "tree")
       tree["definitions"] = newBranch[FieldTypeDef, WrappedItem](anything({}), "definitions")
       tree["parameters"] = newBranch[FieldTypeDef, WrappedItem](anything({}), "parameters")
@@ -1298,7 +1305,7 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
             of Complex:
               deftree[k] = newBranch[FieldTypeDef, WrappedItem](parsed.ftype, k)
             else:
-              error "can't grok " & k & " of type " & $wrapped.kind
+              error "can't grok " & k & " of type " & $wrapped
           var onedef = schema.makeTypeDef(k, input=v)
           if onedef.ok:
             typeSection.add onedef.ast
