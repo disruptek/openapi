@@ -1261,7 +1261,7 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
 
   # set the default recallable factory
   if generator.recallable == nil:
-    generator.imports.add ident"openapi/rest"
+    generator.imports.add ident"rest"
     generator.recallable = ident"newRecallable"
   else:
     # build the declaration for the recallable method
