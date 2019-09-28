@@ -87,3 +87,5 @@ In any case, the inputs will be validated according to the API definition and on
 - Schema v2 https://swagger.io/specification/v2
 - Schema v3 https://swagger.io/specification (not yet supported)
 - Amazon Web Services APIs in Nim https://github.com/disruptek/atoz
+- Google Cloud Platform APIs in Nim https://github.com/disruptek/gcplat
+- Microsoft Azure Cloud APIs in Nim https://github.com/disruptek/bluu
