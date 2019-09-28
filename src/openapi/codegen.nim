@@ -1064,6 +1064,12 @@ proc renderPreface(js: JsonNode): string =
     result &= info.getOrDefault("license").renderLicense
     result &= "\n" & info.pluckString("description").get("") & "\n"
 
+proc declareQueryString(qs: NimNode): NimNode =
+  ## pre-declare the query string proc
+  let query = ident"query"
+  result = quote do:
+    proc `qs`(`query`: JsonNode): string
+
 proc preamble(oac: NimNode): NimNode =
   ## code common to all apis
   result = newStmtList([])
@@ -1198,7 +1204,6 @@ proc newGenerator*(inputfn: string; outputfn: string): Generator {.compileTime.}
   result.ast = newStmtList()
   result.imports = newNimNode(nnkImportStmt)
   result.hydratePath = ident"hydratePath"
-  result.queryString = ident"queryString"
   for location in ParameterIn.low .. ParameterIn.high:
     result.forms.incl location
 
@@ -1249,6 +1254,12 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
       schema: FieldTypeDef
       typedefs: seq[FieldTypeDef]
       tree: WrappedField
+
+  # declare the query string proc if necessary
+  if generator.queryString == nil:
+    generator.queryString = ident"queryString"
+  else:
+    generator.ast.add declareQueryString(generator.queryString)
 
   # set the default recallable factory
   if generator.recallable == nil:
