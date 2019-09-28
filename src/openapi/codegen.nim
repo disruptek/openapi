@@ -1191,15 +1191,6 @@ proc hydratePath(input: JsonNode; segments: seq[PathToken]): Option[string] =
     return
   result = some(head & remainder.get)
   """
-  when false:
-    result.add parseStmt """
-  proc massageHeaders(node: JsonNode): seq[KeyVal] =
-    if node == nil or node.kind != JObject or node.len == 0:
-      return
-    for kv in node.pairs:
-      assert kv.val.kind == JString
-      result.add (key: kv.key, val: kv.val.getStr)
-      """
 
 proc newGenerator*(inputfn: string; outputfn: string): Generator {.compileTime.} =
   ## create a new generator
