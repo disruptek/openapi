@@ -73,8 +73,8 @@ The `call` procedure returns a `Recallable` object which holds details associate
 
 JSON objects matching the OpenAPI parameter locations:
 ```nim
-proc call*(call_745068: Call_GetLotteryDraw_745063; query: JsonNode;
-           body: JsonNode; header: JsonNode; path: JsonNode; formData: JsonNode): Recallable
+proc call*(call_745068: Call_GetLotteryDraw_745063; 
+           path: JsonNode; query: JsonNode; header: JsonNode; formData: JsonNode; body: JsonNode): Recallable
 ```
 Named arguments in native Nim types with default values if supported:
 ```nim
