@@ -50,7 +50,7 @@ proc parseTemplate*(path: string): TemplateParse =
     variable <- '{' * >text * '}':
       segments.add (kind: VariableSegment, value: $1)
     segment <- >text | variable:
-      if capture.len > 0:
+      if capture.len > 1:
         segments.add (kind: ConstantSegment, value: $1)
     path <- +segment
   var parsed = destruct.match(path)
