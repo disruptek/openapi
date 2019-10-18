@@ -38,7 +38,7 @@ iterator constants*(parsed: TemplateParse): string =
       continue
     yield segment.value
 
-proc parseTemplate*(path: string): TemplateParse =
+proc parseTemplate*(path: string): TemplateParse {.compileTime.} =
   ## parse a path and pull out the variable names and constants
   if not path.isTemplate:
     return TemplateParse(ok: false, path: path)
