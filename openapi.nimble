@@ -1,4 +1,4 @@
-version = "3.1.1"
+version = "3.1.2"
 author = "disruptek"
 description = "OpenAPI Code Generator"
 license = "MIT"
