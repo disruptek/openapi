@@ -538,7 +538,10 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
     for param in op.parameters.forLocation(InPath):
       assert false, $op & " has param " & $param & " but path isn't a template"
     body.add quote do:
-      result.path = `base` & `route`
+      if `base` == "/" and `route`.startsWith "/":
+        result.path = `route`
+      else:
+        result.path = `base` & `route`
   else:
     let
       parsed = path.path.parseTemplate
@@ -573,7 +576,10 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
     body.add quote do:
       if `hydrated`.isNone:
         raise newException(ValueError, "unable to fully hydrate path")
-      result.path = `base` & `hydrated`.get
+      if `base` == "/" and `hydrated`.get.startsWith "/":
+        result.path = `hydrated`.get
+      else:
+        result.path = `base` & `hydrated`.get
 
   var params = @[ident"Uri"]
   params.add newIdentDefs(protocol, ident"Scheme")
@@ -1236,7 +1242,7 @@ proc init*(generator: var Generator; content: string) =
     error "schema parse error: " & pr.msg
 
   # setup some imports we'll want so the user doesn't need to add them
-  for module in ["json", "options", "hashes", "uri"]:
+  for module in ["json", "options", "hashes", "uri", "strutils"]:
     # FIXME: check to prevent dupes
     generator.imports.add newIdentNode(module)
 
