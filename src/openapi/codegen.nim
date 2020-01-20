@@ -702,7 +702,7 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
         return
       if not required:
         required = required or param.required
-        if required:
+        if required and param.default == nil:
           var msg = loco & " argument is necessary"
           if location != InBody:
             msg &= " due to required `" & param.name & "` field"
