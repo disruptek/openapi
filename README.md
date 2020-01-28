@@ -20,7 +20,7 @@ import openapi/codegen
 # 0) API handle, 1) input JSON source, 2) output Nim source
 generate myAPI, "input.json", "output.nim":
   ## here you can mess with the generator directly as needed...
-  
+
   # add a constant from the input to the API...
   let service = generator.js["info"]["x-serviceName"].getStr
   generator.ast.add newConstStmt(ident"myService", newStrLitNode(service))
@@ -73,7 +73,7 @@ The `call` procedure returns a `Recallable` object which holds details associate
 
 JSON objects matching the OpenAPI parameter locations:
 ```nim
-proc call*(call_745068: Call_GetLotteryDraw_745063; 
+proc call*(call_745068: Call_GetLotteryDraw_745063;
            path: JsonNode; query: JsonNode; header: JsonNode; formData: JsonNode; body: JsonNode): Recallable
 ```
 Named arguments in native Nim types with default values if supported:
@@ -89,3 +89,9 @@ In any case, the inputs will be validated according to the API definition and on
 - Amazon Web Services APIs in Nim https://github.com/disruptek/atoz
 - Google Cloud Platform APIs in Nim https://github.com/disruptek/gcplat
 - Microsoft Azure Cloud APIs in Nim https://github.com/disruptek/bluu
+
+## Documentation
+See [the documentation for the openapi module](https://disruptek.github.io/openapi/openapi.html) as generated directly from the source.
+
+## License
+MIT
