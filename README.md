@@ -1,4 +1,4 @@
-# OpenAPI Code Generator for Nim
+# OpenAPI Code Generator for Nim [![Build Status](https://travis-ci.org/disruptek/openapi.svg?branch=master)](https://travis-ci.org/disruptek/openapi)
 
 ## Example
 
