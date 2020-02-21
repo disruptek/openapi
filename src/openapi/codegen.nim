@@ -139,12 +139,14 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
     error "schema is required for " & $result & "\n" & js.pretty
   elif result.location != InBody and "schema" in js:
     error "schema is inappropriate for " & $result & "\n" & js.pretty
+  # recusively de-ref schema
   while "schema" in js:
     js = js["schema"]
     var source = root.pluckRefJson(js)
     if source == nil:
       break
     js = source
+  # and store it as the source
   if result.source == nil:
     result.source = js
 
@@ -421,23 +423,26 @@ proc defaultNode(op: Operation; param: Parameter; root: JsonNode): NimNode =
 
 proc documentation(p: Parameter; form: DocType; root: JsonNode; name=""): NimNode =
   ## document the given parameter
-  var
-    label = if name == "": p.name else: name
-    docs = "  " & label & ": "
-  if p.kind.isNone:
-    docs &= "{unknown type}"
+  when defined openapiOmitAllDocs:
+    result = newEmptyNode()
   else:
-    case form:
-    of Json:
-      docs &= $p.kind.get.major
-    of Native:
-      docs &= $p.kind.get.major.toNimNode
-  if p.required:
-    docs &= " (required)"
-  if p.description != "":
-    docs &= "\n" & spaces(2 + label.len) & ": "
-    docs &= p.description
-  result = newCommentStmtNode(docs)
+    var
+      label = if name == "": p.name else: name
+      docs = "  " & label & ": "
+    if p.kind.isNone:
+      docs &= "{unknown type}"
+    else:
+      case form:
+      of Json:
+        docs &= $p.kind.get.major
+      of Native:
+        docs &= $p.kind.get.major.toNimNode
+    if p.required:
+      docs &= " (required)"
+    if p.description != "":
+      docs &= "\n" & spaces(2 + label.len) & ": "
+      docs &= p.description
+    result = newCommentStmtNode(docs)
 
 proc sectionParameter(param: Parameter; kind: JsonNodeKind; section: NimNode; default: NimNode = nil): NimNode =
   ## pluck value out of location input, validate it, store it in section ident
@@ -593,33 +598,38 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
 proc locationParamDefs(op: Operation; nillable: bool): seq[NimNode] =
   ## produce a list of name/value parameters for each location
   for location in ParameterIn.low..ParameterIn.high:
-    var locIdent = newIdentNode($location)
-    # we require all locations for signature reasons
-    result.add locIdent.toJsonParameter(required=not nillable)
+    result.add newIdentNode($location).toJsonParameter(required = not nillable)
 
-proc makeCallWithLocationInputs(generator: var Generator; op: Operation): Option[NimNode] =
+proc makeCallWithLocationInputs(generator: var Generator;
+                                op: Operation): Option[NimNode] =
   ## a call that gets passed JsonNodes for each parameter section
   let
     name = newExportedIdentNode("call")
-    validIdent = ident"valid"
     callName = genSym(ident="call")
-    output = ident"result"
   var
     content: NimNode
-    validatorParams: seq[NimNode]
-    validatorProc = newDotExpr(callName, ident"validator")
     body = newStmtList()
 
   # add documentation if available
-  if op.description != "":
-    body.add newCommentStmtNode(op.description & "\n")
-  body.maybeAddExternalDocs(op.js)
+  when not defined(openapiOmitAllDocs):
+    if op.description != "":
+      body.add newCommentStmtNode(op.description & "\n")
+    body.maybeAddExternalDocs(op.js)
 
-  for location in ParameterIn.low..ParameterIn.high:
-    validatorParams.add newIdentNode($location)
+  block:
+    # build a simple list of validator parameters by name
+    # (path, query, header, formData, body, _)
+    var
+      validatorParams: seq[NimNode]
+    for location in ParameterIn.low..ParameterIn.high:
+      validatorParams.add newIdentNode($location)
+    validatorParams.add ident"_"
 
-  var validatorCall = validatorProc.newCall(validatorParams)
-  body.add newLetStmt(validIdent, validatorCall)
+    # valid = SomeCall.validate_SomeCall(path, query, header, formData, body, _)
+    body.add newLetStmt(ident"valid",
+                        newDotExpr(callName,
+                                   ident"validator").newCall(validatorParams))
+
   var
     urlProc = newDotExpr(callName, ident"url")
     urlHost = newDotExpr(callName, ident"host")
@@ -627,13 +637,16 @@ proc makeCallWithLocationInputs(generator: var Generator; op: Operation): Option
     urlRoute = newDotExpr(callName, ident"route")
     scheme = ident"scheme"
     protocol = newDotExpr(scheme, ident"get")
-    path = newCall(newDotExpr(validIdent, ident"getOrDefault"),
+    path = newCall(newDotExpr(ident"valid", ident"getOrDefault"),
                    newStrLitNode("path"))
-    query = newCall(newDotExpr(validIdent, ident"getOrDefault"),
+    query = newCall(newDotExpr(ident"valid", ident"getOrDefault"),
                    newStrLitNode("query"))
+  # if any of the parameters appear in the body, then pull the body
+  # from the validated input JsonNode
   if InBody in op.parameters.forms:
-    content = newCall(newDotExpr(validIdent, ident"getOrDefault"),
+    content = newCall(newDotExpr(ident"valid", ident"getOrDefault"),
                                  newStrLitNode("body"))
+  # otherwise, pass nil instead of a JsonNode body
   else:
     content = newNilLit()
 
@@ -643,19 +656,27 @@ proc makeCallWithLocationInputs(generator: var Generator; op: Operation): Option
       raise newException(IOError, "unable to find a supported scheme")
   body.add newLetStmt(ident"url", newCall(urlProc, protocol, urlHost,
                                           urlBase, urlRoute, path, query))
-  let heads = newCall(newDotExpr(validIdent,
-                                 ident"getOrDefault"),
-                      newStrLitNode("header"))
   if generator.recallable == nil:
-    body.add newAssignment(output, newCall(ident"newRecallable", callName,
-                                           ident"url", heads, content))
+    # pull the headers out of the validated input JsonNode
+    let heads = newCall(newDotExpr(ident"valid",
+                                   ident"getOrDefault"),
+                        newStrLitNode("header"))
+
+    # by default, we just run newRecallable() with the url, headers, and body
+    body.add newAssignment(ident"result",
+                           newCall(ident"newRecallable", callName,
+                                   ident"url", heads, ident"_"))
   else:
-    body.add newAssignment(output, newCall(generator.recallable, callName,
-                                           ident"url", validIdent))
+    # if the user supplies a hook, we'll supply the validated inputs node
+    body.add newAssignment(ident"result",
+                           newCall(generator.recallable, callName,
+                                   ident"url", ident"valid", ident"_"))
 
   var params = @[ident"Recallable"]
   params.add newIdentDefs(callName, op.typename)
-  params &= op.locationParamDefs(nillable=false)
+  # we no longer require all locations
+  params.add op.locationParamDefs(nillable = true)
+  params.add newIdentDefs(ident"_", ident"string", newStrLitNode"")
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
 proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode] =
@@ -667,9 +688,10 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
     body = newStmtList()
 
   # add documentation if available
-  if op.description != "":
-    body.add newCommentStmtNode(op.description & "\n")
-  body.maybeAddExternalDocs(op.js)
+  when not defined(openapiOmitAllDocs):
+    if op.description != "":
+      body.add newCommentStmtNode(op.description & "\n")
+    body.maybeAddExternalDocs(op.js)
 
   # all of these procs need all sections for consistency
   body.add quote do:
@@ -684,10 +706,11 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
       loco = $location
       locIdent = newIdentNode(loco)
     required = false
-    if location in op.parameters.forms:
-      body.add newCommentStmtNode("parameters in `" & loco & "` object:")
-      for param in op.parameters.forLocation(location):
-        body.add param.documentation(Json, root)
+    when not defined(openapiOmitAllDocs):
+      if location in op.parameters.forms:
+        body.add newCommentStmtNode("parameters in `" & loco & "` object:")
+        for param in op.parameters.forLocation(location):
+          body.add param.documentation(Json, root)
 
     # the body IS the section, so don't bother creating a JObject for it
     if location != InBody:
@@ -721,8 +744,8 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
         `output`.add `loco`, `section`
 
   var params = @[ident"JsonNode"]
-  #params.add newIdentDefs(callName, callType)
-  params &= op.locationParamDefs(nillable=false)
+  params.add op.locationParamDefs(nillable = false)
+  params.add newIdentDefs(ident"_", ident"string", newStrLitNode"")
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
 proc usesJsonWhenNative(param: Parameter): bool =
@@ -782,10 +805,11 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
     sections = newTable[ParameterIn, NimNode]()
 
   # add documentation if available
-  body.add newCommentStmtNode(op.saneName)
-  if op.description != "":
-    body.add newCommentStmtNode(op.description)
-  body.maybeAddExternalDocs(op.js)
+  when not defined(openapiOmitAllDocs):
+    body.add newCommentStmtNode(op.saneName)
+    if op.description != "":
+      body.add newCommentStmtNode(op.description)
+    body.maybeAddExternalDocs(op.js)
 
   # document the parameters
   for param in op.parameters:
@@ -852,7 +876,7 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
   var
     params = @[ident"Recallable"]
   params.add newIdentDefs(callName, callType)
-  params &= op.namedParamDefs(generator.forms)
+  params.add op.namedParamDefs(generator.forms)
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
 proc makeCallType(generator: Generator; path: PathItem; op: Operation): NimNode =
@@ -1103,6 +1127,7 @@ proc preamble(oac: NimNode): NimNode =
     schemeP = ident"scheme"
     hashP = ident"hash"
     oarcP = ident"OpenApiRestCall"
+    underP = ident"_"
 
   result.add quote do:
     type
@@ -1112,9 +1137,9 @@ proc preamble(oac: NimNode): NimNode =
         Wss = "wss"
         Ws = "ws",
 
-      `vsP` = proc (`queryP`: JsonNode = nil; `bodyP`: JsonNode = nil;
-         `headerP`: JsonNode = nil; `pathP`: JsonNode = nil;
-         `formP`: JsonNode = nil): JsonNode
+      `vsP` = proc (`pathP`: JsonNode = nil; `queryP`: JsonNode = nil;
+                    `headerP`: JsonNode = nil; `formP`: JsonNode = nil;
+                    `bodyP`: JsonNode = nil; `underP`: string = ""): JsonNode
       `oarcP` = ref object of RestCall
         validator*: `vsP`
         route*: string
@@ -1247,8 +1272,9 @@ proc init*(generator: var Generator; content: string) =
     generator.imports.add newIdentNode(module)
 
   # add the preface so we're ready for the user to add code
-  generator.ast.add newCommentStmtNode(generator.js.renderPreface)
-  generator.ast.maybeAddExternalDocs(generator.js)
+  when not defined(openapiOmitAllDocs):
+    generator.ast.add newCommentStmtNode(generator.js.renderPreface)
+    generator.ast.maybeAddExternalDocs(generator.js)
 
   # add common code
   if generator.roottype == nil:
@@ -1282,12 +1308,13 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
     params.add newIdentDefs(ident"call", ident"OpenApiRestCall")
     params.add newIdentDefs(ident"url", ident"Uri")
     params.add newIdentDefs(ident"input", ident"JsonNode")
+    params.add newIdentDefs(ident"body", ident"string", default = newStrLitNode"")
     var pragmas = newNimNode(nnkPragma)
     pragmas.add ident"base"
     generator.ast.add newProc(hookP, params,
       body = newEmptyNode(), procType = nnkMethodDef, pragmas = pragmas)
 
-  while true:
+  block:
     when MAKETYPES:
       tree = newBranch[FieldTypeDef, WrappedItem](anything({}), "tree")
       tree["definitions"] = newBranch[FieldTypeDef, WrappedItem](anything({}), "definitions")

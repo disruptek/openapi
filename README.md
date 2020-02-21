@@ -82,6 +82,11 @@ proc call*(call_745069: Call_GetLotteryDraw_745063; game: string; count: int = 0
 ```
 In any case, the inputs will be validated according to the API definition and only inputs which match parameters defined by the API will be sent to the server, and only if their types are correct.
 
+## Compile-Time Defines
+
+- `openapiOmitAllDocs` does what it says on the tin; the Nim output API will not
+include documentation comments for Json input API calls.
+
 ## Some useful links
 - APIs we consume https://github.com/APIs-guru/openapi-directory/blob/master/APIs
 - Schema v2 https://swagger.io/specification/v2
