@@ -11,6 +11,7 @@ import parser
 import paths
 
 from schema2 import OpenApi2
+from schema3 import OpenApi3
 
 const MAKETYPES = false
 when MAKETYPES:
@@ -1259,6 +1260,10 @@ proc init*(generator: var Generator; content: string) =
     if generator.js["swagger"].getStr != "2.0":
       error "we only know how to parse openapi-2.0 atm"
     generator.schema = OpenApi2
+  elif "openapi" in generator.js:
+    if not generator.js["openapi"].getStr.startsWith("3."):
+      error "we only know how to parse openapi-3.xxx atm"
+    generator.schema = OpenApi3
   else:
     error "no swagger version found in the input"
 
