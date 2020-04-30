@@ -481,6 +481,10 @@ proc maybeAddExternalDocs(node: var NimNode; js: JsonNode) =
     if comment.isSome:
       node.add newCommentStmtNode(comment.get)
 
+proc addNoSink(validator: NimNode): NimNode =
+  result = validator
+  validator.addPragma ident"nosinks"
+
 proc maybeDeprecate(name: NimNode; params: seq[NimNode]; body: NimNode;
                     deprecate: bool): NimNode =
   ## make a proc and maybe deprecate it
@@ -746,7 +750,9 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
   var params = @[ident"JsonNode"]
   params.add op.locationParamDefs(nillable = false)
   params.add newIdentDefs(ident"_", ident"string", newStrLitNode"")
-  result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
+  let
+    maybe = maybeDeprecate(name, params, body, deprecate=op.deprecated)
+  result = addNoSink(maybe).some
 
 proc usesJsonWhenNative(param: Parameter): bool =
   ## simple test to see if a parameter should use a json type
