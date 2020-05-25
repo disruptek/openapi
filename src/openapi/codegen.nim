@@ -635,10 +635,11 @@ proc makeCallWithLocationInputs(generator: var Generator;
                                    ident"validator").newCall(validatorParams))
 
   var
-    urlProc = newDotExpr(callName, ident"url")
+    urlProc = newDotExpr(callName, ident"makeUrl")
     urlHost = newDotExpr(callName, ident"host")
     urlBase = newDotExpr(callName, ident"base")
     urlRoute = newDotExpr(callName, ident"route")
+    letUrl = ident"uri"
     scheme = ident"scheme"
     protocol = newDotExpr(scheme, ident"get")
     path = newCall(newDotExpr(ident"valid", ident"getOrDefault"),
@@ -658,7 +659,7 @@ proc makeCallWithLocationInputs(generator: var Generator;
   body.add quote do:
     if `scheme`.isNone:
       raise newException(IOError, "unable to find a supported scheme")
-  body.add newLetStmt(ident"url", newCall(urlProc, protocol, urlHost,
+  body.add newLetStmt(letUrl, newCall(urlProc, protocol, urlHost,
                                           urlBase, urlRoute, path, query))
   if generator.recallable == nil:
     # pull the headers out of the validated input JsonNode
@@ -669,12 +670,12 @@ proc makeCallWithLocationInputs(generator: var Generator;
     # by default, we just run newRecallable() with the url, headers, and body
     body.add newAssignment(ident"result",
                            newCall(ident"newRecallable", callName,
-                                   ident"url", heads, ident"_"))
+                                   letUrl, heads, ident"_"))
   else:
     # if the user supplies a hook, we'll supply the validated inputs node
     body.add newAssignment(ident"result",
                            newCall(generator.recallable, callName,
-                                   ident"url", ident"valid", ident"_"))
+                                   letUrl, ident"valid", ident"_"))
 
   var params = @[ident"Recallable"]
   params.add newIdentDefs(callName, op.typename)
@@ -752,7 +753,10 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
   params.add newIdentDefs(ident"_", ident"string", newStrLitNode"")
   let
     maybe = maybeDeprecate(name, params, body, deprecate=op.deprecated)
-  result = addNoSink(maybe).some
+  when NimMajor == 1 and NimMinor < 1:
+    result = maybe.some
+  else:
+    result = addNoSink(maybe).some
 
 proc usesJsonWhenNative(param: Parameter): bool =
   ## simple test to see if a parameter should use a json type
@@ -911,7 +915,7 @@ proc makeCallVar(generator: Generator; path: PathItem; op: Operation): NimNode =
   result = quote do:
     var `saneCall` = `saneType`(name: `sane`, meth: `methId`, host: `host`,
                                 route: `route`, validator: `validId`,
-                                base: `base`, url: `urlId`, schemes: `schemes`)
+                                base: `base`, makeUrl: `urlId`, schemes: `schemes`)
 
 proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
   ## create a new operation for a given http method on a given path
@@ -1152,8 +1156,9 @@ proc preamble(oac: NimNode): NimNode =
         base*: string
         host*: string
         schemes*: set[Scheme]
-        url*: proc (`protoP`: Scheme; `hostP`: string; `baseP`: string;
-                    `routeP`: string; `pathP`: JsonNode; `queryP`: JsonNode): Uri
+        makeUrl*: proc (`protoP`: Scheme; `hostP`: string;
+                        `baseP`: string; `routeP`: string;
+                        `pathP`: JsonNode; `queryP`: JsonNode): Uri
 
       # this gives the user a type to hook into for code in their macro
       `oac` = ref object of `oarcP`
