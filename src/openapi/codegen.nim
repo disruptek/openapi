@@ -1189,9 +1189,10 @@ proc preamble(oac: NimNode): NimNode =
       ## ensure an input is of the correct json type and yield
       ## a suitable default value when appropriate
       if `jsP` == nil:
-        if `defaultP` != nil:
-          return validateParameter(`defaultP`, `kindP`,
-            required=`requiredP`)
+        if `requiredP`:
+          if `defaultP` != nil:
+            return validateParameter(`defaultP`, `kindP`,
+              required=`requiredP`)
       result = `jsP`
       if result == nil:
         assert not `requiredP`, $`kindP` & " expected; received nil"
