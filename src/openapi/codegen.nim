@@ -684,6 +684,14 @@ proc makeCallWithLocationInputs(generator: var Generator;
   params.add newIdentDefs(ident"_", ident"string", newStrLitNode"")
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
+proc wrapIfUnderscoreEmpty(node: var NimNode) =
+  var cond = nnkElifExpr.newNimNode
+  cond.add newCall(ident"==", ident"_", "".newLit)
+  cond.add node
+  var rawBody = nnkIfExpr.newNimNode
+  rawBody.add cond
+  node = rawBody
+
 proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode] =
   ## create a proc to validate and compose inputs for a given call
   let
@@ -728,15 +736,25 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
       if param.kind.isNone:
         warning "failure to infer type for parameter " & $param
         return
+      var
+        assertion: NimNode
       if not required:
         required = required or param.required
         if required and param.default == nil:
           var msg = loco & " argument is necessary"
           if location != InBody:
             msg &= " due to required `" & param.name & "` field"
-          body.add quote do:
+          assertion = quote do:
             assert `locIdent` != nil, `msg`
-      body.add param.sectionParameter(param.kind.get.major, section, default=default)
+          if location == InBody:
+            wrapIfUnderscoreEmpty(assertion)
+          body.add assertion
+      var
+        sectionParam = param.sectionParameter(param.kind.get.major, section,
+                                              default = default)
+      if location == InBody:
+        wrapIfUnderscoreEmpty(sectionParam)
+      body.add sectionParam
 
     if location == InBody:
       # just leave the body out if it's undefined (as a signal)
