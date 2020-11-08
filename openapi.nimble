@@ -1,11 +1,10 @@
-version = "3.2.1"
+version = "3.2.2"
 author = "disruptek"
 description = "OpenAPI Code Generator"
 license = "MIT"
-requires "nim >= 1.0.6"
-requires "npeg >= 0.22.0 & < 0.23.0"
-requires "foreach >= 1.0.1"
-requires "https://github.com/disruptek/rest.git >= 1.0.3"
+requires "npeg < 1.0.0"
+requires "foreach >= 1.0.1 & < 2.0.0"
+requires "https://github.com/disruptek/rest.git >= 1.0.3 & < 2.0.0"
 
 srcDir = "src"
 
