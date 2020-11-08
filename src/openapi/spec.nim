@@ -24,6 +24,7 @@ type
     List      ## an array
     Either    ## one of 2+ possible values
     Complex   ## a map-like object
+    Map       ## a uniform map object
   FieldTypeDef* = ref object ## the type for any given value
     kinds*: set[JsonNodeKind]
     pattern*: bool
@@ -37,6 +38,8 @@ type
       member*: FieldTypeDef
     of Complex:
       schema*: Schema
+    of Map:
+      mapMember*: FieldTypeDef
   ## string values as per the spec
   HttpOpName* = enum
     Get = "get"
@@ -116,6 +119,9 @@ proc newFieldTypeDef*(kind: FieldType; kinds: set[JsonNodeKind]={};
   of Either:
     # TODO: maybe perform an assertion here?
     result = FieldTypeDef(kind: Either, kinds: {}, pattern: pattern, required: required)
+  of Map:
+    result = FieldTypeDef(kind: Map, kinds: {JObject}, pattern: pattern, required: required,
+                          mapMember: member)
   #else:
   # raise newException(Defect, "unimplemented " & $kind & " field")
 
@@ -142,6 +148,8 @@ converter toJsonNodeKind*(f: FieldTypeDef): JsonNodeKind =
     result = JObject
   of List:
     result = JArray
+  of Map:
+    result = JObject
   of Anything:
     result = JNull
   of Either:
@@ -174,6 +182,8 @@ proc paint(src: FieldTypeDef; dst: FieldTypeDef) =
     dst.schema = src.schema
   of List:
     dst.member = src.member
+  of Map:
+    dst.mapMember = src.mapMember
   of Either:
     dst.a = src.a
     dst.b = src.b
@@ -181,6 +191,10 @@ proc paint(src: FieldTypeDef; dst: FieldTypeDef) =
 
 proc arrayOf*(member: FieldTypeDef): FieldTypeDef =
   result = FieldTypeDef(kind: List, kinds: {JArray}, member: member,
+    pattern: member.pattern, required: member.required)
+
+proc mapOf*(member: FieldTypeDef): FieldTypeDef =
+  result = FieldTypeDef(kind: Map, kinds: {JObject}, mapMember: member,
     pattern: member.pattern, required: member.required)
 
 converter toFieldTypeDef*(list: array[1, FieldTypeDef]): FieldTypeDef =

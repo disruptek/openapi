@@ -168,7 +168,7 @@ proc parseField*(ftype: FieldTypeDef; js: JsonNode): ParserResult =
     result = ftype.a.parseField(js)
     if not result.ok:
       result = ftype.b.parseField(js)
-  of List:
+  of List, Map:
     foreach j in js.items of JsonNode:
       result = ftype.member.parseField(j)
       if not result.ok:
