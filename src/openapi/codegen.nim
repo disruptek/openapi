@@ -1159,7 +1159,7 @@ proc preamble(oac: NimNode): NimNode =
 
   result.add quote do:
     type
-      `SchemeP` {.pure.} = enum
+      `SchemeP`* {.pure.} = enum
         Https = "https",
         Http = "http",
         Wss = "wss"
