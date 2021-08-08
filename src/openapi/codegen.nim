@@ -1231,11 +1231,25 @@ type
   """
   result.add parseStmt """
 proc queryString(query: JsonNode): string {.used.} =
+  proc toString(js: JsonNode): string =
+    case js.kind
+    of JNull: ""
+    of JInt: $(getInt js)
+    of JFloat: $(getFloat js)
+    of JBool: $(getBool js)
+    else: getStr js
+
+  if query.isNil: return ""
   var qs: seq[KeyVal]
-  if query == nil:
-    return ""
   for k, v in query.pairs:
-    qs.add (key: k, val: v.getStr)
+    if not v.isNil and v.kind == JArray:
+      if v.len == 0:
+        qs.add (key: k, val: "")
+      else:
+        for v in v.items:
+          qs.add (key: k, val: v.toString)
+    else:
+      qs.add (key: k, val: v.toString)
   result = encodeQuery(qs)
 
 proc hydratePath(input: JsonNode; segments: seq[PathToken]): Option[string] {.used.} =
