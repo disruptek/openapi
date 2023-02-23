@@ -1358,7 +1358,7 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
     generator.ast.add newProc(hookP, params,
       body = newEmptyNode(), procType = nnkMethodDef, pragmas = pragmas)
 
-  block:
+  block complete:
     when MAKETYPES:
       tree = newBranch[FieldTypeDef, WrappedItem](anything({}), "tree")
       tree["definitions"] = newBranch[FieldTypeDef, WrappedItem](anything({}), "definitions")
@@ -1412,7 +1412,7 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
         generator.ast.add op.ast
 
     generator.ok = true
-    break
+    break complete
 
 template generate*(name: untyped; input: string; output: string; body: untyped): untyped {.dirty.} =
   ## parse input json filename and output nim target library
