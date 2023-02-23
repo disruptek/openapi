@@ -1,4 +1,8 @@
-# OpenAPI Code Generator for Nim [![Build Status](https://travis-ci.org/disruptek/openapi.svg?branch=master)](https://travis-ci.org/disruptek/openapi)
+# openapi
+[![Test Matrix](https://github.com/disruptek/openapi/workflows/CI/badge.svg)](https://github.com/disruptek/openapi/actions?query=workflow%3ACI)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/disruptek/openapi?style=flat)](https://github.com/disruptek/openapi/releases/latest)
+![Minimum supported Nim version](https://img.shields.io/badge/nim-1.6.11%2B-informational?style=flat&logo=nim)
+[![License](https://img.shields.io/github/license/disruptek/openapi?style=flat)](#license)
 
 ## Example
 
