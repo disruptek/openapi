@@ -1,1 +1,4 @@
-tests/tests
+deps
+bin
+nim.cfg
+nimblemeta.json

@@ -4,9 +4,7 @@ description = "OpenAPI Code Generator"
 license = "MIT"
 requires "npeg < 1.0.0"
 requires "foreach >= 1.0.1 & < 2.0.0"
-requires "https://github.com/disruptek/rest.git >= 1.0.3 & < 2.0.0"
-
-srcDir = "src"
+requires "https://github.com/disruptek/rest.git >= 1.0.5 & < 2.0.0"
 
 proc execCmd(cmd: string) =
   echo "execCmd:" & cmd

@@ -1,16 +1,13 @@
-import logging
-import unittest
-import strutils
-import options
-import json
+import std/logging
+import std/unittest
+import std/strutils
+import std/options
+import std/json
 
-import openapi/paths
-import openapi/parser
-import openapi/hydrate
+import pkg/openapi/paths
+import pkg/openapi/parser
+import pkg/openapi/hydrate
 
-
-let logger = newConsoleLogger(useStderr=true)
-addHandler(logger)
 
 const
   templates = @[
