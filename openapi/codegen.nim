@@ -12,6 +12,8 @@ import paths
 
 from schema2 import OpenApi2
 
+var underscore {.compileTime.} = ident"content"  ## the immortal _
+
 const MAKETYPES = false
 when MAKETYPES:
   import typewrap
@@ -627,7 +629,7 @@ proc makeCallWithLocationInputs(generator: var Generator;
       validatorParams: seq[NimNode]
     for location in ParameterIn.low..ParameterIn.high:
       validatorParams.add newIdentNode($location)
-    validatorParams.add ident"_"
+    validatorParams.add underscore
 
     # valid = SomeCall.validate_SomeCall(path, query, header, formData, body, _)
     body.add newLetStmt(ident"valid",
@@ -670,23 +672,23 @@ proc makeCallWithLocationInputs(generator: var Generator;
     # by default, we just run newRecallable() with the url, headers, and body
     body.add newAssignment(ident"result",
                            newCall(ident"newRecallable", callName,
-                                   letUrl, heads, ident"_"))
+                                   letUrl, heads, underscore))
   else:
     # if the user supplies a hook, we'll supply the validated inputs node
     body.add newAssignment(ident"result",
                            newCall(generator.recallable, callName,
-                                   letUrl, ident"valid", ident"_"))
+                                   letUrl, ident"valid", underscore))
 
   var params = @[ident"Recallable"]
   params.add newIdentDefs(callName, op.typename)
   # we no longer require all locations
   params.add op.locationParamDefs(nillable = true)
-  params.add newIdentDefs(ident"_", ident"string", newStrLitNode"")
+  params.add newIdentDefs(underscore, ident"string", newStrLitNode"")
   result = some(maybeDeprecate(name, params, body, deprecate=op.deprecated))
 
 proc wrapIfUnderscoreEmpty(node: var NimNode) =
   var cond = nnkElifExpr.newNimNode
-  cond.add newCall(ident"==", ident"_", "".newLit)
+  cond.add newCall(ident"==", underscore, "".newLit)
   cond.add node
   var rawBody = nnkIfExpr.newNimNode
   rawBody.add cond
@@ -768,7 +770,7 @@ proc makeValidator(op: Operation; name: NimNode; root: JsonNode): Option[NimNode
 
   var params = @[ident"JsonNode"]
   params.add op.locationParamDefs(nillable = false)
-  params.add newIdentDefs(ident"_", ident"string", newStrLitNode"")
+  params.add newIdentDefs(underscore, ident"string", newStrLitNode"")
   let
     maybe = maybeDeprecate(name, params, body, deprecate=op.deprecated)
   when NimMajor == 1 and NimMinor < 1:
@@ -1155,7 +1157,7 @@ proc preamble(oac: NimNode): NimNode =
     schemeP = ident"scheme"
     hashP = ident"hash"
     oarcP = ident"OpenApiRestCall"
-    underP = ident"_"
+    underP = underscore
 
   result.add quote do:
     type
