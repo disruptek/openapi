@@ -1419,6 +1419,7 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
 template generate*(name: untyped; input: string; output: string; body: untyped): untyped {.dirty.} =
   ## parse input json filename and output nim target library
   import macros
+  import strutils
 
   macro name(embody: untyped): untyped =
     var generator = newGenerator(inputfn= input, outputfn= output)
