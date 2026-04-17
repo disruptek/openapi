@@ -52,7 +52,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
-        nim: [devel, version-1-6]
+        nim: [devel, version-2-0]
     name: '${{ matrix.os }} (${{ matrix.nim }})'
     runs-on: ${{ matrix.os }}
     steps:
@@ -73,7 +73,7 @@ jobs:
           cd project
           nimble --accept develop
           nimble --accept install "https://github.com/disruptek/balls"
-          balls --path="." --backend:c --backend:cpp --backend:js
+          balls --path="." --define:release --define:danger --backend:c --backend:cpp
 
       - name: Build docs
         if: ${{ matrix.docs }} == 'true'
