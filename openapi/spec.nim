@@ -46,6 +46,7 @@ type
     Options = "options"
     Head = "head"
     Patch = "patch"
+    Trace = "trace"
 
   Scheme* {.pure.} = enum
     Https = "https",
