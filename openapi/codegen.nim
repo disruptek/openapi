@@ -5,12 +5,14 @@ import strutils
 import options
 import hashes
 import strtabs
+import uri
 
 import spec
 import parser
 import paths
 
 from schema2 import OpenApi2
+from schema3 import OpenApi3
 
 var underscore {.compileTime.} = ident"content"  ## the immortal _
 
@@ -70,16 +72,15 @@ type
     urlname*: NimNode
 
   Generator* = object of ConsumeResult
+    version*: int  ## 2 for openapi 2.0 (swagger), 3 for openapi 3.x
     schemes*: set[Scheme]
     roottype*: NimNode
     inputfn*: string
     outputfn*: string
     imports*: NimNode
-    types*: NimNode
     recallable*: NimNode
     hydratePath*: NimNode
     queryString*: NimNode
-    makeTypes: NimNode
     forms*: set[ParameterIn]
 
 proc guessDefault(kind: GuessTypeResult; root: JsonNode; input: JsonNode): JsonNode =
@@ -95,7 +96,7 @@ proc guessDefault(kind: GuessTypeResult; root: JsonNode; input: JsonNode): JsonN
       result = target
 
 proc requiresPassedInput(param: Parameter): bool =
-  ## determine if the parameter may will require passed input
+  ## determine if the parameter will require passed input
   result = param.required and param.default == nil
 
 proc shortRepr(js: JsonNode): string =
@@ -103,7 +104,7 @@ proc shortRepr(js: JsonNode): string =
   assert js.kind in {JNull, JBool, JInt, JFloat, JString}
   result = $js.kind & "(" & $js & ")"
 
-proc newParameter(root: JsonNode; input: JsonNode): Parameter =
+proc newParameter(root: JsonNode; input: JsonNode; version: int = 2): Parameter =
   ## instantiate a new parameter from a JsonNode schema
   assert input != nil and input.kind == JObject, "bizarre input: " &
     input.pretty
@@ -114,16 +115,30 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
     js = input
   elif documentation.isNone:
     documentation = js.pluckString("description")
+
+  # in oa3, type info lives inside a schema sub-object; for oa2 it's
+  # inline on the parameter itself.  guessType already handles both
+  # shapes (it tries "type", then "schema"), so this just works.
   var kind = js.guessType(root)
   if kind.isNone:
     error "unable to guess type:\n" & js.pretty
   result = Parameter(ok: false, kind: kind, js: js)
   result.name = js["name"].getStr
-  result.location = parseEnum[ParameterIn](js["in"].getStr)
+  try:
+    result.location = parseEnum[ParameterIn](js["in"].getStr)
+  except ValueError:
+    warning "unsupported parameter location `" & js["in"].getStr &
+      "` for parameter `" & result.name & "`; skipping"
+    return
   result.required = js.getOrDefault("required").getBool
   if documentation.isSome:
     result.description = documentation.get
-  result.default = kind.get.guessDefault(root, js)
+
+  # for oa3 parameters, look for defaults inside the schema sub-object
+  if version >= 3 and "schema" in js:
+    result.default = kind.get.guessDefault(root, js["schema"])
+  else:
+    result.default = kind.get.guessDefault(root, js)
 
   if result.default != nil:
     var defkind = result.default.guessType(root)
@@ -139,7 +154,9 @@ proc newParameter(root: JsonNode; input: JsonNode): Parameter =
   # format for the parameter; it can be overridden with `schema`
   if result.location == InBody and "schema" notin js:
     error "schema is required for " & $result & "\n" & js.pretty
-  elif result.location != InBody and "schema" in js:
+  elif version < 3 and result.location != InBody and "schema" in js:
+    # in oa2, non-body params carry type inline; schema is unexpected.
+    # in oa3, schema is the *only* way to declare the type.
     error "schema is inappropriate for " & $result & "\n" & js.pretty
   # recusively de-ref schema
   while "schema" in js:
@@ -308,13 +325,13 @@ proc init(parameters: var Parameters) =
   parameters.tab = initTable[Hash, Parameter]()
   parameters.forms = {}
 
-proc readParameters(root: JsonNode; js: JsonNode): Parameters =
+proc readParameters(root: JsonNode; js: JsonNode; version: int = 2): Parameters =
   ## parse parameters out of an arbitrary JsonNode
   result.init()
   for param in js:
-    var parameter = root.newParameter(param)
+    var parameter = root.newParameter(param, version)
     if not parameter.ok:
-      error "bad parameter:\n" & param.pretty
+      warning "skipping bad parameter:\n" & param.pretty
       continue
     result.add parameter
 
@@ -453,7 +470,7 @@ proc sectionParameter(param: Parameter; kind: JsonNodeKind; section: NimNode; de
     name = param.name
     reqIdent = newIdentNode($param.required)
     locIdent = newIdentNode($param.location)
-    validIdent = genSym(ident="valid")
+    validIdent = genSym(nskLet,"valid")
     defNode = if default == nil: newNilLit() else: default
     kindIdent = newIdentNode($kind)
   # you might think `locIdent`.getOrDefault() would be a good place to simply
@@ -577,8 +594,9 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
 
     # construct a list of segments we'll use to hydrate the path
     for segment in parsed.segments:
-      var par = newPar([newColonExpr(ident"kind", newIdentNode($segment.kind)),
-                        newColonExpr(ident"value", newStrLitNode(segment.value))])
+      var par = newNimNode(nnkTupleConstr)
+      par.add newColonExpr(ident"kind", newIdentNode($segment.kind))
+      par.add newColonExpr(ident"value", newStrLitNode(segment.value))
       bracket.add par
     body.add newConstStmt(segments, bracket.prefix("@"))
 
@@ -611,7 +629,7 @@ proc makeCallWithLocationInputs(generator: var Generator;
   ## a call that gets passed JsonNodes for each parameter section
   let
     name = newExportedIdentNode("call")
-    callName = genSym(ident="call")
+    callName = genSym(nskLet,"call")
   var
     content: NimNode
     body = newStmtList()
@@ -825,7 +843,7 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
   ## create a proc to validate and compose inputs for a given call
   let
     name = newExportedIdentNode("call")
-    callName = genSym(ident="call")
+    callName = genSym(nskLet,"call")
     callType = op.typename
     output = ident"result"
   var
@@ -859,7 +877,7 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
     # look for the parameters in order to setup new JObjects
     block found:
       for param in op.parameters.forLocation(location):
-        var section = genSym(ident= $location)
+        var section = genSym(nskLet, $location)
         sections[location] = section
         validatorParams.add section
         body.add newVarStmt(section, newCall(ident"newJObject"))
@@ -939,6 +957,7 @@ proc makeCallVar(generator: Generator; path: PathItem; op: Operation): NimNode =
 
 proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonNode): Operation =
   ## create a new operation for a given http method on a given path
+  let version = path.generator.version
   var
     response: Response
     js = root.pluckRefJson(input)
@@ -965,9 +984,9 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
       warning "invented operation name `" & sane & "`"
       result.operationId = sane
   let sane = result.saneName
-  result.typename = genSym(ident="Call_" & sane.capitalizeAscii)
-  result.prepname = genSym(ident="validate_" & sane.capitalizeAscii)
-  result.urlname = genSym(ident="url_" & sane.capitalizeAscii)
+  result.typename = genSym(nskLet,"Call_" & sane.capitalizeAscii)
+  result.prepname = genSym(nskLet,"validate_" & sane.capitalizeAscii)
+  result.urlname = genSym(nskLet,"url_" & sane.capitalizeAscii)
   if "responses" in js:
     for status, resp in js["responses"].pairs:
       response = root.newResponse(status, resp)
@@ -985,11 +1004,39 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
       result.parameters.add parameter
   # parameters for this particular http method
   if "parameters" in js:
-    for parameter in root.readParameters(js["parameters"]):
+    for parameter in root.readParameters(js["parameters"], version):
       var badadd = result.parameters.safeAdd(parameter, sane)
       if badadd.isSome:
         warning badadd.get
         result.parameters.add parameter
+
+  # oa3: convert requestBody into a synthetic body parameter
+  if version >= 3 and "requestBody" in js:
+    var rb = js["requestBody"]
+    # dereference if it's a $ref
+    var rbResolved = root.pluckRefJson(rb)
+    if rbResolved != nil:
+      rb = rbResolved
+    var bodyJs = newJObject()
+    bodyJs["name"] = newJString("body")
+    bodyJs["in"] = newJString("body")
+    bodyJs["description"] = %rb.getOrDefault("description").getStr("")
+    bodyJs["required"] = %rb.getOrDefault("required").getBool(false)
+    # extract schema from the first content media type
+    if "content" in rb and rb["content"].kind == JObject:
+      for mimeType, mediaType in rb["content"].pairs:
+        if mediaType.kind == JObject and "schema" in mediaType:
+          bodyJs["schema"] = mediaType["schema"]
+          break
+    if "schema" in bodyJs:
+      var parameter = root.newParameter(bodyJs, version)
+      if parameter.ok:
+        var badadd = result.parameters.safeAdd(parameter, sane)
+        if badadd.isSome:
+          warning badadd.get
+          result.parameters.add parameter
+    else:
+      warning "requestBody in `" & sane & "` has no schema"
 
   result.ast = newStmtList()
 
@@ -1029,12 +1076,28 @@ proc newPathItem(gen: Generator; path: string; input: JsonNode): PathItem =
   let root = gen.js
   var op: Operation
   result = PathItem(ok: false, generator: gen, path: path, js: input)
-  if root != nil and root.kind == JObject and "basePath" in root:
-    if root["basePath"].kind == JString:
-      result.basePath = root["basePath"].getStr
-  if root != nil and root.kind == JObject and "host" in root:
-    if root["host"].kind == JString:
-      result.host = root["host"].getStr
+  if gen.version >= 3:
+    # oa3: extract host and basePath from the first server url
+    if root != nil and root.kind == JObject and "servers" in root:
+      let servers = root["servers"]
+      if servers.kind == JArray and servers.len > 0:
+        let url = servers[0].getOrDefault("url").getStr
+        if url != "":
+          let parsed = parseUri(url)
+          result.host = parsed.hostname
+          if parsed.port != "":
+            result.host &= ":" & parsed.port
+          result.basePath = parsed.path
+          if result.basePath == "":
+            result.basePath = "/"
+  else:
+    # oa2: host and basePath are top-level fields
+    if root != nil and root.kind == JObject and "basePath" in root:
+      if root["basePath"].kind == JString:
+        result.basePath = root["basePath"].getStr
+    if root != nil and root.kind == JObject and "host" in root:
+      if root["host"].kind == JString:
+        result.host = root["host"].getStr
   if input == nil or input.kind != JObject:
     error "unimplemented path item input:\n" & input.pretty
     return
@@ -1044,7 +1107,7 @@ proc newPathItem(gen: Generator; path: string; input: JsonNode): PathItem =
 
   # record default parameters for the path
   if "parameters" in input:
-    result.parameters = root.readParameters(input["parameters"])
+    result.parameters = root.readParameters(input["parameters"], gen.version)
 
   # look for operation names in the input
   for opName in HttpOpName:
@@ -1282,6 +1345,7 @@ proc hydratePath(input: JsonNode; segments: seq[PathToken]): Option[string] {.us
 proc newGenerator*(inputfn: string; outputfn: string): Generator {.compileTime.} =
   ## create a new generator
   result = Generator(ok: false, inputfn: inputfn, outputfn: outputfn)
+  result.version = 0  # set by init() after parsing
   result.ast = newStmtList()
   result.imports = newNimNode(nnkImportStmt)
   result.hydratePath = ident"hydratePath"
@@ -1303,10 +1367,17 @@ proc init*(generator: var Generator; content: string) =
 
   if "swagger" in generator.js:
     if generator.js["swagger"].getStr != "2.0":
-      error "we only know how to parse openapi-2.0 atm"
+      error "unsupported swagger version: " & generator.js["swagger"].getStr
     generator.schema = OpenApi2
+    generator.version = 2
+  elif "openapi" in generator.js:
+    let ver = generator.js["openapi"].getStr
+    if not ver.startsWith("3."):
+      error "unsupported openapi version: " & ver
+    generator.schema = OpenApi3
+    generator.version = 3
   else:
-    error "no swagger version found in the input"
+    error "no swagger or openapi version found in the input"
 
   let pr = generator.schema.parseSchema(generator.js)
   if not pr.ok:
@@ -1324,7 +1395,7 @@ proc init*(generator: var Generator; content: string) =
 
   # add common code
   if generator.roottype == nil:
-    generator.roottype = genSym(ident="OpenApiRestCall")
+    generator.roottype = genSym(nskLet,"OpenApiRestCall")
   generator.ast.add generator.roottype.preamble
 
 proc consume*(generator: var Generator; content: string) {.compileTime.} =
@@ -1399,14 +1470,31 @@ proc consume*(generator: var Generator; content: string) {.compileTime.} =
           generator.ast.add typeSection
 
     # determine which schemes we'll support
-    if "schemes" notin generator.js or generator.js["schemes"].kind != JArray:
-      error "no schemes defined"
-      return
-    for s in generator.js["schemes"]:
-      if s.kind != JString:
-        error "wrong type for scheme: " & $s.kind
+    if generator.version >= 3:
+      # oa3: extract schemes from server urls
+      if "servers" in generator.js and generator.js["servers"].kind == JArray:
+        for server in generator.js["servers"]:
+          let url = server.getOrDefault("url").getStr
+          if url != "":
+            let parsed = parseUri(url)
+            if parsed.scheme != "":
+              try:
+                generator.schemes.incl parseEnum[Scheme](parsed.scheme)
+              except ValueError:
+                warning "unsupported scheme in server url: " & parsed.scheme
+      # default to https if no servers or no scheme found
+      if generator.schemes == {}:
+        generator.schemes.incl Scheme.Https
+    else:
+      # oa2: schemes is a top-level array
+      if "schemes" notin generator.js or generator.js["schemes"].kind != JArray:
+        error "no schemes defined"
         return
-      generator.schemes.incl parseEnum[Scheme](s.getStr)
+      for s in generator.js["schemes"]:
+        if s.kind != JString:
+          error "wrong type for scheme: " & $s.kind
+          return
+        generator.schemes.incl parseEnum[Scheme](s.getStr)
 
     # add whatever we can for each operation
     for path in generator.paths(generator.schema):
@@ -1420,6 +1508,7 @@ template generate*(name: untyped; input: string; output: string; body: untyped):
   ## parse input json filename and output nim target library
   import macros
   import strutils
+  import openapi/codegen
 
   macro name(embody: untyped): untyped =
     var generator = newGenerator(inputfn= input, outputfn= output)

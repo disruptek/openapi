@@ -8,8 +8,6 @@ import hashes
 when not defined(release):
   import strformat
 
-import foreach
-
 export JsonNodeKind
 
 type
@@ -46,6 +44,7 @@ type
     Options = "options"
     Head = "head"
     Patch = "patch"
+    Trace = "trace"
 
   Scheme* {.pure.} = enum
     Https = "https",
@@ -69,7 +68,7 @@ converter toNimNode*(scheme: Scheme): NimNode =
 
 converter toNimNode*(schemes: set[Scheme]): NimNode =
   result = newNimNode(nnkCurly)
-  foreach scheme in schemes.items of Scheme:
+  for scheme in schemes.items:
     result.add scheme.toNimNode
 
 proc hash*(scheme: Scheme): Hash =
@@ -148,7 +147,7 @@ converter toJsonNodeKind*(f: FieldTypeDef): JsonNodeKind =
     assert false, "nonsensical conversion of Either type"
   of Primitive:
     assert f.kinds.len == 1, "ambiguous types: " & $f.kinds
-    foreach n in f.kinds.items of JsonNodeKind:
+    for n in f.kinds.items:
       result = n
 
 converter toFieldTypeDef*(s: set[JsonNodeKind]): FieldTypeDef =
@@ -241,7 +240,7 @@ proc pluckRefJson*(root: JsonNode; input: JsonNode): JsonNode =
   while paths.len > 0 and paths[0] in ["", "#"]:
     paths = paths[1..^1]
   result = root
-  foreach p in paths.items of string:
+  for p in paths.items:
     if p notin result:
       warning "schema reference `" & target.get() & "` not found"
       return nil
@@ -301,7 +300,7 @@ proc guessType*(js: JsonNode; root: JsonNode): Option[GuessTypeResult] =
       elif "allOf" in input:
         major = "object"
         assert input["allOf"].kind == JArray
-        foreach n in input["allOf"].items of JsonNode:
+        for n in input["allOf"].items:
           input = n
           break
       else:
@@ -379,7 +378,7 @@ converter toNimNode*(ftype: FieldTypeDef): NimNode =
       return newCommentStmtNode("missing type specification")
     if ftype.kinds.card != 1:
       return newCommentStmtNode("multiple types is too many")
-    foreach kind in ftype.kinds.items of JsonNodeKind:
+    for kind in ftype.kinds.items:
       return kind.toNimNode
   of List:
     assert ftype.member != nil
@@ -397,7 +396,7 @@ proc isKeyword*(identifier: string): bool =
   ## true if the given identifier is a nim keyword
   result = identifier in [
     "addr", "and", "as", "asm",
-    "bind", "block", "break", "block", "break",
+    "bind", "block", "break",
     "case", "cast", "concept", "const", "continue", "converter",
     "defer", "discard", "distinct", "div", "do",
     "elif", "else", "end", "enum", "except", "export",
@@ -423,7 +422,7 @@ proc isValidNimIdentifier*(s: string): bool =
   if s.len > 0 and s[0] in IdentStartChars:
     if s.len > 1 and '_' in [s[0], s[^1]]:
       return false
-    foreach i in 1..s.len-1 of int:
+    for i in 1..s.len-1:
       if s[i] notin IdentChars:
         return false
       if s[i] == '_' and s[i-1] == '_':

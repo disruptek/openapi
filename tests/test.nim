@@ -2,12 +2,15 @@ import std/strutils
 import std/options
 import std/json
 
+import pkg/openapi/spec
 import pkg/openapi/paths
 import pkg/openapi/parser
 import pkg/openapi/hydrate
+from pkg/openapi/schema2 import OpenApi2
 
 
 const
+  petstore2 = staticRead("petstore2.json")
   templates = @[
     "{path}", "{mime type}",
     "/{path}", "/path/{path}",
@@ -107,3 +110,32 @@ static:
   wet = "sqs.{none}{an int}.{a bool}.amazonaws.com".hydrateTemplate(values)
   assert wet.isSome
   assert wet.get == "sqs.42.true.amazonaws.com"
+
+  echo "parse openapi 2.0 petstore spec against schema"
+  let v2js = petstore2.parseJson()
+  let v2pr = OpenApi2.parseSchema(v2js)
+  assert v2pr.ok, "schema2 parse failed: " & $v2pr
+
+  echo "detect swagger version"
+  assert "swagger" in v2js
+  assert v2js["swagger"].getStr == "2.0"
+  assert "openapi" notin v2js
+
+  echo "guess type from v2 inline parameter"
+  let v2param = v2js["paths"]["/pets"]["get"]["parameters"][0]
+  assert v2param["name"].getStr == "limit"
+  assert v2param["type"].getStr == "integer"
+  let v2kind = v2param.guessType(v2js)
+  assert v2kind.isSome
+  assert v2kind.get.major == JInt
+
+  echo "resolve v2 definition refs"
+  let errorRef = %* {"$ref": "#/definitions/Error"}
+  let errorDef = v2js.pluckRefJson(errorRef)
+  assert errorDef != nil
+  assert "properties" in errorDef
+
+  echo "reject malformed v2 spec"
+  let badJs = %* {"swagger": "2.0", "info": {"title": "x", "version": "1"}}
+  let badPr = OpenApi2.parseSchema(badJs)
+  assert not badPr.ok

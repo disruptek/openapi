@@ -2,15 +2,7 @@
 import tables
 
 import spec
-
-
-template `<~`(name: untyped; fields: openArray[(FieldName, FieldTypeDef)]) =
-  # it's a var because we sometimes need to mutate it
-  var name {.compileTime.} = `fields`.newSchema
-
-template `<~`(name: untyped; ftype: FieldTypeDef) =
-  # it's a var because we sometimes need to mutate it
-  var name {.compileTime.} = ftype
+import schemadsl
 
 Contact <~ {
   "name": optional JString,
@@ -135,7 +127,6 @@ SchemaObject <~ {
   "minProperties": optional JInt,
   "required": optional JString.arrayOf,
   "enum": optional EnumArray,
-  "multipleOf": optional JInt,
 
   "^x-": optional patterned anything {},
 }
@@ -216,7 +207,7 @@ SchemesArray <~ JString.arrayOf
 
 Tag <~ {
   "name": required JString,
-  "description": optional Jstring,
+  "description": optional JString,
   "externalDocs": optional ExternalDocs,
 
   "^x-": patterned optional anything {},
@@ -225,7 +216,7 @@ Tag <~ {
 Operation <~ {
   "responses": required Responses,
 
-  "tags": optional Tag.arrayOf,
+  "tags": optional JString.arrayOf,
   "summary": optional JString,
   "description": optional JString,
   "externalDocs": optional ExternalDocs,
@@ -261,14 +252,17 @@ SecurityScope <~ {
 }
 
 SecurityScheme <~ {
-  "name": required JString,
-  "in": required JString,
-  "flow": required JString,
-  "authorizationUrl": required JString,
-  "tokenUrl": required JString,
-  "scopes": required SecurityScope.arrayOf,
+  "type": required JString,
 
-  "type": optional JString,
+  # which of these are required depends on the value of type;
+  # the schema DSL can't express conditional requirements so we
+  # mark them all optional and let codegen validate further.
+  "name": optional JString,
+  "in": optional JString,
+  "flow": optional JString,
+  "authorizationUrl": optional JString,
+  "tokenUrl": optional JString,
+  "scopes": optional SecurityScope.arrayOf,
   "description": optional JString,
 
   "^x-": patterned optional anything {},

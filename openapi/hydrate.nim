@@ -2,7 +2,6 @@ import json
 import options
 import uri
 
-import foreach
 import spec
 import paths
 
@@ -15,7 +14,7 @@ converter toHydrationInputs(input: JsonNode): seq[KeyVal] =
     return
   if input.kind != JObject:
     return
-  foreach k, v in input.pairs of string and JsonNode:
+  for k, v in input.pairs:
     var value: string
     case v.kind:
     of JString:
@@ -38,7 +37,7 @@ proc hydratePath(input: openarray[KeyVal]; segments: seq[PathToken]): Option[str
   of ConstantSegment: discard
   of VariableSegment:
     block found:
-      foreach kv in input.items of KeyVal:
+      for kv in input.items:
         if head == kv.key:
           head = kv.val
           break found
@@ -60,13 +59,13 @@ proc hydrateTemplate*(path: string; values: openarray[KeyVal]): Option[string] =
 
   parsed = parseTemplate(path)
 
-  foreach segment in parsed.segments.items of PathToken:
+  for segment in parsed.segments.items:
     if segment.kind != VariableSegment:
       continue
     var
       msg = "path template references an unknown variable `" & $segment & "`"
     block found:
-      foreach kv in values.items of KeyVal:
+      for kv in values.items:
         if kv.key == $segment:
           break found
       raise newException(ValueError, msg)

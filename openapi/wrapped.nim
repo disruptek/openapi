@@ -3,7 +3,6 @@ import macros
 import json
 import strutils
 
-import foreach
 import spec
 import typewrap
 import paths
@@ -107,7 +106,7 @@ iterator objectProperties(input: JsonNode): NimNode =
   var onedef, typedef: NimNode
   if input != nil:
     assert input.kind == JObject, "nonsensical json type in objectProperties"
-    foreach k, v in input.pairs of string and JsonNode:
+    for k, v in input.pairs:
       if k == "$ref":
         continue
       # a single property typedef
@@ -159,7 +158,7 @@ proc defineObject(input: JsonNode): NimNode =
   result.add newEmptyNode()
   result.add newEmptyNode()
   reclist = newNimNode(nnkRecList)
-  foreach def in input.objectProperties of NimNode:
+  for def in input.objectProperties:
     if target != nil:
       warning "found a properties ref and 1+ props: " & def.strVal, result
       break
@@ -201,7 +200,7 @@ proc defineObjectOrMap(input: JsonNode): NimNode =
   elif "allOf" in input:
     warning "allOf support is terrible!"
     assert input["allOf"].kind == JArray
-    foreach n in input["allOf"].items of JsonNode:
+    for n in input["allOf"].items:
       result = n.defineObjectOrMap()
       if result != nil:
         break
@@ -263,7 +262,7 @@ proc parseTypeDefOrRef(input: JsonNode): NimNode =
     elif "allOf" in input:
       warning "allOf poorly implemented!"
       assert input["allOf"].kind == JArray
-      foreach n in input["allOf"].items of JsonNode:
+      for n in input["allOf"].items:
         return n.parseTypeDefOrRef()
     elif input.len == 0:
       # it's okay, it's an empty map {}

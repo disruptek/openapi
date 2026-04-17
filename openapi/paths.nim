@@ -4,8 +4,6 @@ import sequtils
 
 import npeg
 
-import foreach
-
 type
   PathTokenKind* = enum ConstantSegment, VariableSegment
   PathToken* = tuple
@@ -27,13 +25,13 @@ proc isTemplate*(path: string): bool =
   return a < b and a > -1
 
 iterator variables*(parsed: TemplateParse): string =
-  foreach segment in parsed.segments.items of PathToken:
+  for segment in parsed.segments.items:
     if segment.kind != VariableSegment:
       continue
     yield segment.value
 
 iterator constants*(parsed: TemplateParse): string =
-  foreach segment in parsed.segments.items of PathToken:
+  for segment in parsed.segments.items:
     if segment.kind != ConstantSegment:
       continue
     yield segment.value
@@ -108,7 +106,7 @@ proc match*(source: string; path: string;
   let (fhead, ftail) = constants.headrest
   discard ftail # noqa
   # greedily attempt to match constants, starting at the back
-  foreach i in path.rfind(fhead) of int:
+  for i in path.rfind(fhead):
     if match(source[head.len..^1], path[i..^1], constants, tail):
       return true
   assert false, "path doesn't match source variable"
@@ -124,7 +122,7 @@ proc match*(tp: TemplateParse; input: string): bool =
 proc composePath*(path: string; variables: Table[string, string]): string =
   ## create a path with variable substitution per the template, variables
   result = path
-  foreach key, value in variables.pairs of string and string:
+  for key, value in variables.pairs:
     var token = '{' & key & '}'
     result = result.replace(token, value)
     assert token notin result, "replace didn't replace all instances"

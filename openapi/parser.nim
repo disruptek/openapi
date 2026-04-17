@@ -8,7 +8,6 @@ import sequtils
 when not defined(release):
   import strformat
 
-import foreach
 import spec
 import paths
 
@@ -80,7 +79,7 @@ proc parsePair(js: JsonNode; name: FieldName; ftype: FieldTypeDef;
     assert not ftype.required, "regexp `" & name & "` required?"
     assert name.isRegexp, "i can't grok `" & name & "` as regexp"
     # examine missing keys from input, and
-    foreach key in missing.toSeq of string:
+    for key in missing.toSeq:
       # ignore any that don't match
       if not key.match(name):
         continue
@@ -98,7 +97,7 @@ proc parsePair(js: JsonNode; name: FieldName; ftype: FieldTypeDef;
     var caught = name.parseTemplate
     if not caught.ok:
       return result.fail("bad template", key=name)
-    foreach key in missing.toSeq of string:
+    for key in missing.toSeq:
       # FIXME: are multiple templates ever valid?
       assert caught.match(key), "template doesn't match " & key
       missing.excl key
@@ -134,7 +133,7 @@ proc parseSchema*(schema: Schema; js: JsonNode): ParserResult =
 
   missing.init()
   # first iterate over input, and
-  foreach key, value in js.pairs of string and JsonNode:
+  for key, value in js.pairs:
     # note missing fields, or
     if key notin schema:
       missing.incl key
@@ -146,7 +145,7 @@ proc parseSchema*(schema: Schema; js: JsonNode): ParserResult =
       return result.fail(result.msg, key=key)
 
   # turning to the schema,
-  foreach name, ftype in schema.pairs of string and FieldTypeDef:
+  for name, ftype in schema.pairs:
     result = js.parsePair(name, ftype, missing)
     if not result.ok:
       return
@@ -169,7 +168,7 @@ proc parseField*(ftype: FieldTypeDef; js: JsonNode): ParserResult =
     if not result.ok:
       result = ftype.b.parseField(js)
   of List:
-    foreach j in js.items of JsonNode:
+    for j in js.items:
       result = ftype.member.parseField(j)
       if not result.ok:
         break
