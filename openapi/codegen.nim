@@ -470,7 +470,7 @@ proc sectionParameter(param: Parameter; kind: JsonNodeKind; section: NimNode; de
     name = param.name
     reqIdent = newIdentNode($param.required)
     locIdent = newIdentNode($param.location)
-    validIdent = genSym(ident="valid")
+    validIdent = genSym("valid")
     defNode = if default == nil: newNilLit() else: default
     kindIdent = newIdentNode($kind)
   # you might think `locIdent`.getOrDefault() would be a good place to simply
@@ -594,8 +594,9 @@ proc makeUrl(path: PathItem; op: Operation): NimNode =
 
     # construct a list of segments we'll use to hydrate the path
     for segment in parsed.segments:
-      var par = newPar([newColonExpr(ident"kind", newIdentNode($segment.kind)),
-                        newColonExpr(ident"value", newStrLitNode(segment.value))])
+      var par = newNimNode(nnkTupleConstr)
+      par.add newColonExpr(ident"kind", newIdentNode($segment.kind))
+      par.add newColonExpr(ident"value", newStrLitNode(segment.value))
       bracket.add par
     body.add newConstStmt(segments, bracket.prefix("@"))
 
@@ -628,7 +629,7 @@ proc makeCallWithLocationInputs(generator: var Generator;
   ## a call that gets passed JsonNodes for each parameter section
   let
     name = newExportedIdentNode("call")
-    callName = genSym(ident="call")
+    callName = genSym("call")
   var
     content: NimNode
     body = newStmtList()
@@ -842,7 +843,7 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
   ## create a proc to validate and compose inputs for a given call
   let
     name = newExportedIdentNode("call")
-    callName = genSym(ident="call")
+    callName = genSym("call")
     callType = op.typename
     output = ident"result"
   var
@@ -876,7 +877,7 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
     # look for the parameters in order to setup new JObjects
     block found:
       for param in op.parameters.forLocation(location):
-        var section = genSym(ident= $location)
+        var section = genSym( $location)
         sections[location] = section
         validatorParams.add section
         body.add newVarStmt(section, newCall(ident"newJObject"))
@@ -983,9 +984,9 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
       warning "invented operation name `" & sane & "`"
       result.operationId = sane
   let sane = result.saneName
-  result.typename = genSym(ident="Call_" & sane.capitalizeAscii)
-  result.prepname = genSym(ident="validate_" & sane.capitalizeAscii)
-  result.urlname = genSym(ident="url_" & sane.capitalizeAscii)
+  result.typename = genSym("Call_" & sane.capitalizeAscii)
+  result.prepname = genSym("validate_" & sane.capitalizeAscii)
+  result.urlname = genSym("url_" & sane.capitalizeAscii)
   if "responses" in js:
     for status, resp in js["responses"].pairs:
       response = root.newResponse(status, resp)
@@ -1394,7 +1395,7 @@ proc init*(generator: var Generator; content: string) =
 
   # add common code
   if generator.roottype == nil:
-    generator.roottype = genSym(ident="OpenApiRestCall")
+    generator.roottype = genSym("OpenApiRestCall")
   generator.ast.add generator.roottype.preamble
 
 proc consume*(generator: var Generator; content: string) {.compileTime.} =
@@ -1507,6 +1508,7 @@ template generate*(name: untyped; input: string; output: string; body: untyped):
   ## parse input json filename and output nim target library
   import macros
   import strutils
+  import openapi/codegen
 
   macro name(embody: untyped): untyped =
     var generator = newGenerator(inputfn= input, outputfn= output)
