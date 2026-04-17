@@ -26,9 +26,9 @@ jobs:
           nim-version: ${{ matrix.nim }}
 
       - name: Install dependencies
-        run: nimble --accept develop
+        run: |
+          nimble --accept develop
+          nimble --accept install "https://github.com/disruptek/balls"
 
       - name: Run tests
-        run: |
-          nim c -f -r tests/test.nim
-          nim c -f -r tests/test3.nim
+        run: balls --path="."
