@@ -10,8 +10,7 @@ from pkg/openapi/schema2 import OpenApi2
 
 
 const
-  petstore2 = staticRead(
-    "OpenAPI-Specification/examples/v2.0/json/petstore.json")
+  petstore2 = staticRead("petstore2.json")
   templates = @[
     "{path}", "{mime type}",
     "/{path}", "/path/{path}",
