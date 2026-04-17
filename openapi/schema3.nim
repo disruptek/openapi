@@ -2,15 +2,7 @@
 import tables
 
 import spec
-
-
-template `<~`(name: untyped; fields: openArray[(FieldName, FieldTypeDef)]) =
-  # it's a var because we sometimes need to mutate it
-  var name {.compileTime.} = `fields`.newSchema
-
-template `<~`(name: untyped; ftype: FieldTypeDef) =
-  # it's a var because we sometimes need to mutate it
-  var name {.compileTime.} = ftype
+import schemadsl
 
 Contact3 <~ {
   "name": optional JString,
@@ -90,10 +82,14 @@ XmlObject3 <~ {
 
 EnumArray3 <~ arrayOf(anything {})
 
+DiscriminatorMapping <~ {
+  "{name}": optional JString,
+}
+
 Discriminator3 <~ {
   "propertyName": required JString,
 
-  "mapping": optional JString,
+  "mapping": optional DiscriminatorMapping,
 
   "^x-": patterned optional anything {},
 }

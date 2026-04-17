@@ -398,7 +398,7 @@ proc isKeyword*(identifier: string): bool =
   ## true if the given identifier is a nim keyword
   result = identifier in [
     "addr", "and", "as", "asm",
-    "bind", "block", "break", "block", "break",
+    "bind", "block", "break",
     "case", "cast", "concept", "const", "continue", "converter",
     "defer", "discard", "distinct", "div", "do",
     "elif", "else", "end", "enum", "except", "export",

@@ -78,11 +78,9 @@ type
     inputfn*: string
     outputfn*: string
     imports*: NimNode
-    types*: NimNode
     recallable*: NimNode
     hydratePath*: NimNode
     queryString*: NimNode
-    makeTypes: NimNode
     forms*: set[ParameterIn]
 
 proc guessDefault(kind: GuessTypeResult; root: JsonNode; input: JsonNode): JsonNode =
@@ -98,7 +96,7 @@ proc guessDefault(kind: GuessTypeResult; root: JsonNode; input: JsonNode): JsonN
       result = target
 
 proc requiresPassedInput(param: Parameter): bool =
-  ## determine if the parameter may will require passed input
+  ## determine if the parameter will require passed input
   result = param.required and param.default == nil
 
 proc shortRepr(js: JsonNode): string =
