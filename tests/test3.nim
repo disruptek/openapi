@@ -122,4 +122,16 @@ static:
   assert resolvedResp != nil
   assert resolvedResp["type"].getStr == "array"
 
+  echo "reject malformed v3 spec"
+  let badJs = %* {"openapi": "3.0.0"}
+  let badPr = OpenApi3.parseSchema(badJs)
+  assert not badPr.ok
+
+  echo "parse server url with port"
+  let portUrl = parseUri("https://api.example.com:8443/v2")
+  assert portUrl.scheme == "https"
+  assert portUrl.hostname == "api.example.com"
+  assert portUrl.port == "8443"
+  assert portUrl.path == "/v2"
+
   echo "all openapi 3 tests passed"
