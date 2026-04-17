@@ -6,7 +6,8 @@
 
 ## Example
 
-First, you need to convert your YAML swagger input into JSON:
+Both OpenAPI 2.0 (Swagger) and OpenAPI 3.x specs are supported. The
+input must be JSON; convert YAML first:
 
 ```bash
 $ yq . fungenerators.com/lottery/1.5/swagger.yaml > input.json
@@ -94,7 +95,7 @@ include documentation comments for Json input API calls.
 ## Some useful links
 - APIs we consume https://github.com/APIs-guru/openapi-directory/blob/master/APIs
 - Schema v2 https://swagger.io/specification/v2
-- Schema v3 https://swagger.io/specification (not yet supported)
+- Schema v3 https://swagger.io/specification
 - Amazon Web Services APIs in Nim https://github.com/disruptek/atoz
 - Google Cloud Platform APIs in Nim https://github.com/disruptek/gcplat
 - Microsoft Azure Cloud APIs in Nim https://github.com/disruptek/bluu
