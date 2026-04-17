@@ -470,7 +470,7 @@ proc sectionParameter(param: Parameter; kind: JsonNodeKind; section: NimNode; de
     name = param.name
     reqIdent = newIdentNode($param.required)
     locIdent = newIdentNode($param.location)
-    validIdent = genSym("valid")
+    validIdent = genSym(nskLet,"valid")
     defNode = if default == nil: newNilLit() else: default
     kindIdent = newIdentNode($kind)
   # you might think `locIdent`.getOrDefault() would be a good place to simply
@@ -629,7 +629,7 @@ proc makeCallWithLocationInputs(generator: var Generator;
   ## a call that gets passed JsonNodes for each parameter section
   let
     name = newExportedIdentNode("call")
-    callName = genSym("call")
+    callName = genSym(nskLet,"call")
   var
     content: NimNode
     body = newStmtList()
@@ -843,7 +843,7 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
   ## create a proc to validate and compose inputs for a given call
   let
     name = newExportedIdentNode("call")
-    callName = genSym("call")
+    callName = genSym(nskLet,"call")
     callType = op.typename
     output = ident"result"
   var
@@ -877,7 +877,7 @@ proc makeCallWithNamedArguments(generator: var Generator; op: Operation): Option
     # look for the parameters in order to setup new JObjects
     block found:
       for param in op.parameters.forLocation(location):
-        var section = genSym( $location)
+        var section = genSym(nskLet, $location)
         sections[location] = section
         validatorParams.add section
         body.add newVarStmt(section, newCall(ident"newJObject"))
@@ -984,9 +984,9 @@ proc newOperation(path: PathItem; meth: HttpOpName; root: JsonNode; input: JsonN
       warning "invented operation name `" & sane & "`"
       result.operationId = sane
   let sane = result.saneName
-  result.typename = genSym("Call_" & sane.capitalizeAscii)
-  result.prepname = genSym("validate_" & sane.capitalizeAscii)
-  result.urlname = genSym("url_" & sane.capitalizeAscii)
+  result.typename = genSym(nskLet,"Call_" & sane.capitalizeAscii)
+  result.prepname = genSym(nskLet,"validate_" & sane.capitalizeAscii)
+  result.urlname = genSym(nskLet,"url_" & sane.capitalizeAscii)
   if "responses" in js:
     for status, resp in js["responses"].pairs:
       response = root.newResponse(status, resp)
@@ -1395,7 +1395,7 @@ proc init*(generator: var Generator; content: string) =
 
   # add common code
   if generator.roottype == nil:
-    generator.roottype = genSym("OpenApiRestCall")
+    generator.roottype = genSym(nskLet,"OpenApiRestCall")
   generator.ast.add generator.roottype.preamble
 
 proc consume*(generator: var Generator; content: string) {.compileTime.} =
