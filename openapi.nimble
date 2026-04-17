@@ -2,7 +2,7 @@ version = "4.0.1"
 author = "disruptek"
 description = "OpenAPI Code Generator"
 license = "MIT"
-requires "npeg < 1.0.0"
+requires "npeg < 2.0.0"
 requires "foreach >= 1.0.1 & < 2.0.0"
 requires "https://github.com/disruptek/rest.git >= 1.0.5 & < 2.0.0"
 
